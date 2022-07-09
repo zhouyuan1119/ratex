@@ -28,10 +28,10 @@ class RAFBackendImpl : public BaseBackendImpl {
   }
 };
 
-BackendImplRegistry* raf_backend_impl_registry =
-    GetBackendImplRegistry()->AddBackendImpl(new RAFBackendImpl(), 10);
+// BackendImplRegistry* raf_backend_impl_registry =
+//     GetBackendImplRegistry()->AddBackendImpl(new RAFBackendImpl(), 10);
 
-BackendRegistrar g_registrar(GetBackendImplRegistry()->GetBackendImpl());
+// BackendRegistrar g_registrar(GetBackendImplRegistry()->GetBackendImpl());
 
 }  // namespace compiler
 }  // namespace torch_lazy_tensors

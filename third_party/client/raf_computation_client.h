@@ -68,8 +68,16 @@ class RAFComputationClient : public BaseComputationClient {
 
   DataPtr CreateDataPlaceholder(std::string device, Shape shape) override;
 
+  /*! 
+   * \brief Converts lazy tensors to RAF tensors and wrap them as RAFData. First allocates CPU 
+   * memory buffers, then send the tensors to the target device (e.g., GPU). 
+   */
   std::vector<DataPtr> TransferToServer(lazy_tensors::Span<const TensorSource> tensors) override;
 
+  /*! 
+   * \brief Converts RAF tensors to lazy tensor literals, and later to native Torch tensors. CPU
+   * buffers are allocated for these tensors if they are on a different device (e.g., GPU). 
+   */
   std::vector<Literal> TransferFromServer(lazy_tensors::Span<const DataPtr> handles) override;
 
   ComputationPtr Compile(CompileInstance instances) override;

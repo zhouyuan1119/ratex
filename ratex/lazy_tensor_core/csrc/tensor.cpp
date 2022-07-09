@@ -45,7 +45,8 @@
 #include "lazy_tensors/literal_util.h"
 #include "lazy_tensors/shape_util.h"
 #include "torch/csrc/autograd/variable.h"
-
+#include "csrc/compiler/mem_model_lowering_context.h"
+#include "lazy_tensors/computation_client/computation_client.h"
 namespace torch_lazy_tensors {
 namespace {
 
@@ -1441,66 +1442,105 @@ void LazyTensor::BuildInputOutputAliases(const std::vector<LazyTensor>& tensors,
   LTC_VALUE_METRIC("InputOutputAliasCount", alias_map.size());
 }
 
+// LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>& tensors,
+//                                                   lazy_tensors::Span<const std::string> devices,
+//                                                   const SyncTensorCollection& coll,
+//                                                   PostOrderData* po_data) {
+//   const bool enable_aliasing = lazy_tensors::sys_util::GetEnvBool("ENABLE_PARAM_ALIASING", false);
+//   auto lowering_ctx = ir::LoweringContext::Create(
+//       "SyncTensorsGraph", coll.device, po_data->post_order, std::move(po_data->emission_map));
+//   for (auto index : coll.indices) {
+//     ir::Value ir_value = tensors[index].CurrentIrValue();
+//     lowering_ctx->AddResult(ir_value);
+//   }
+//   if (enable_aliasing && coll.config.sync_ltc_data) {
+//     // We can only alias at the step barrier, when force_ltc_data is true.
+//     // Consider the case:
+//     //   1. Tensor A(DEVICE_DATA)
+//     //   2. Tensor B = A + 0.9
+//     //   3. A += 0.4
+//     // If we activate aliasing for A's graph, and we do:
+//     //   print(A)
+//     //   print(A)
+//     // The first print will update DEVICE_DATA' with DEVICE_DATA+0.4, and the
+//     // second print will again update DEVICE_DATA" with DEVICE_DATA'+0.4, which
+//     // will lead to incorrect results.
+//     // We cannot normally turn A's state into DEVICE_DATA, as if any of the
+//     // sources is a view, this will not lead to correct results (as A's value
+//     // taken at different times need to reflect view source changes):
+//     //   1. Tensor A = some_graph_with_view_source(V)
+//     //   2. print(A)
+//     //   3. V += 1
+//     //   4. print(A)
+//     // The second print should reflect the new value due to V's changes.
+//     // Also in the first example, unless we are doing a step barrier and hence
+//     // include all live tensors, if the B value is not part of the graph, it
+//     // will later fetch the new value of A, which is incorrect.
+//     // But, when we issue a step barrier (force_ltc_data == true) we have to
+//     // turn everything into DEVICE_DATA, so we can activate aliasing.
+//     BuildInputOutputAliases(tensors, coll.indices, lowering_ctx.get());
+//   }
+// 
+//   auto computation = ConsumeValue(lowering_ctx->Build());
+//   lazy_tensors::ProgramShape program_shape = ConsumeValue(computation->GetProgramShape());
+//   lazy_tensors::Shape shape =
+//       MakeShapeWithDeviceLayout(program_shape.result(), coll.device.hw_type);
+// 
+//   std::vector<lazy_tensors::ComputationClient::CompileInstance> instances;
+//   instances.push_back({std::move(computation), coll.device.ToString(),
+//                        lazy_tensors::ComputationClient::Get()->GetCompilationDevices(
+//                            coll.device.ToString(), devices),
+//                        &shape});
+// 
+//   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
+//               << " on device " << coll.device << " ...";
+//   std::vector<std::shared_ptr<lazy_tensors::ComputationClient::Computation>> computations =
+//       lazy_tensors::ComputationClient::Get()->Compile(std::move(instances));
+//   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
+//               << " on device " << coll.device << " done!";
+//   LTC_CHECK_EQ(program_shape.parameters_size(), po_data->parameters_data.size());
+// 
+//   return {/*device=*/coll.device,
+//           /*emitted_nodes=*/lowering_ctx->GetEmittedNodeCount(),
+//           /*computation=*/std::move(computations.front()),
+//           /*parameters_data=*/std::move(po_data->parameters_data)};
+// }
+
 LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>& tensors,
                                                   lazy_tensors::Span<const std::string> devices,
                                                   const SyncTensorCollection& coll,
                                                   PostOrderData* po_data) {
-  const bool enable_aliasing = lazy_tensors::sys_util::GetEnvBool("ENABLE_PARAM_ALIASING", false);
-  auto lowering_ctx = ir::LoweringContext::Create(
-      "SyncTensorsGraph", coll.device, po_data->post_order, std::move(po_data->emission_map));
-  for (auto index : coll.indices) {
-    ir::Value ir_value = tensors[index].CurrentIrValue();
-    lowering_ctx->AddResult(ir_value);
-  }
-  if (enable_aliasing && coll.config.sync_ltc_data) {
-    // We can only alias at the step barrier, when force_ltc_data is true.
-    // Consider the case:
-    //   1. Tensor A(DEVICE_DATA)
-    //   2. Tensor B = A + 0.9
-    //   3. A += 0.4
-    // If we activate aliasing for A's graph, and we do:
-    //   print(A)
-    //   print(A)
-    // The first print will update DEVICE_DATA' with DEVICE_DATA+0.4, and the
-    // second print will again update DEVICE_DATA" with DEVICE_DATA'+0.4, which
-    // will lead to incorrect results.
-    // We cannot normally turn A's state into DEVICE_DATA, as if any of the
-    // sources is a view, this will not lead to correct results (as A's value
-    // taken at different times need to reflect view source changes):
-    //   1. Tensor A = some_graph_with_view_source(V)
-    //   2. print(A)
-    //   3. V += 1
-    //   4. print(A)
-    // The second print should reflect the new value due to V's changes.
-    // Also in the first example, unless we are doing a step barrier and hence
-    // include all live tensors, if the B value is not part of the graph, it
-    // will later fetch the new value of A, which is incorrect.
-    // But, when we issue a step barrier (force_ltc_data == true) we have to
-    // turn everything into DEVICE_DATA, so we can activate aliasing.
-    BuildInputOutputAliases(tensors, coll.indices, lowering_ctx.get());
-  }
-
-  auto computation = ConsumeValue(lowering_ctx->Build());
-  lazy_tensors::ProgramShape program_shape = ConsumeValue(computation->GetProgramShape());
-  lazy_tensors::Shape shape =
-      MakeShapeWithDeviceLayout(program_shape.result(), coll.device.hw_type);
-
-  std::vector<lazy_tensors::ComputationClient::CompileInstance> instances;
-  instances.push_back({std::move(computation), coll.device.ToString(),
-                       lazy_tensors::ComputationClient::Get()->GetCompilationDevices(
-                           coll.device.ToString(), devices),
-                       &shape});
-
   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
               << " on device " << coll.device << " ...";
+  
+  // Directly create the computation, we don't need any lowering because we directly process lazy tensor IR
+  std::shared_ptr<lazy_tensors::GenericComputation> computation(
+    std::make_shared<compiler::mem_model_lowering_backend::GenericComputationMemModel>(
+      tensors, po_data->post_order, po_data->parameters_data));
+  // Compute program shape so we can feed into Compile()
+  lazy_tensors::ProgramShape program_shape = ConsumeValue(computation->GetProgramShape());
+  LTC_CHECK_EQ(program_shape.parameters_size(), po_data->parameters_data.size());
+  lazy_tensors::Shape shape =
+      MakeShapeWithDeviceLayout(program_shape.result(), coll.device.hw_type);
+  
+  std::vector<lazy_tensors::ComputationClient::CompileInstance> instances;
+  instances.push_back(
+    lazy_tensors::ComputationClient::CompileInstance(
+      std::move(computation), 
+      coll.device.ToString(),
+      lazy_tensors::ComputationClient::Get()->GetCompilationDevices(coll.device.ToString(), devices),
+      &shape)
+  );
+
+  // Actually compile the program, in our case we will compute peak memory
   std::vector<std::shared_ptr<lazy_tensors::ComputationClient::Computation>> computations =
       lazy_tensors::ComputationClient::Get()->Compile(std::move(instances));
   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
               << " on device " << coll.device << " done!";
-  LTC_CHECK_EQ(program_shape.parameters_size(), po_data->parameters_data.size());
+
 
   return {/*device=*/coll.device,
-          /*emitted_nodes=*/lowering_ctx->GetEmittedNodeCount(),
+          /*emitted_nodes=*/po_data->emission_map.size(),
           /*computation=*/std::move(computations.front()),
           /*parameters_data=*/std::move(po_data->parameters_data)};
 }

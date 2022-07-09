@@ -1186,9 +1186,18 @@ class LazyTensor {
   static PostOrderData RunPostOrder(const std::vector<LazyTensor>& tensors,
                                     lazy_tensors::Span<const size_t> indices);
 
+  /*! 
+   * \brief Check whether the computation is already cached by searching for the hash. 
+   * Returns nullptr otherwise. 
+   * \param tensors list of tensors, unused here
+   * \param hash the hash key to be searched for
+   */
   static ComputationCache::TypePtr LookupCachedCompile(const std::vector<LazyTensor>& tensors,
                                                        const lazy_tensors::hash_t& hash);
 
+  /*!
+   * \brief Check if a computation is already cached. If so, execute it on the hardware. 
+   */
   static std::shared_ptr<Async> TryRunCachedSync(std::vector<LazyTensor>* tensors,
                                                  SyncTensorCollection* coll,
                                                  PostOrderData* po_data);
@@ -1197,10 +1206,17 @@ class LazyTensor {
                                       lazy_tensors::Span<const size_t> indices,
                                       ir::LoweringContext* lowering_ctx);
 
+  /*! 
+   * \brief Actually compiles the computation to the backend (RAF in this case). Node lowering is
+   * performed here, we would like to skip it and only run our own "compile" to generate mem model. 
+   */
   static CompilationResult Compile(const std::vector<LazyTensor>& tensors,
                                    lazy_tensors::Span<const std::string> devices,
                                    const SyncTensorCollection& coll, PostOrderData* po_data);
 
+  /*! 
+   * \brief A wrapper of the functions above, basically compiles and runs the current graph. 
+   */
   static std::shared_ptr<Async> SyncTensorsGraphInternal(
       std::vector<LazyTensor>* tensors, lazy_tensors::Span<const std::string> devices,
       const SyncTensorsConfig& config);
