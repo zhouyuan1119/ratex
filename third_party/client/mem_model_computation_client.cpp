@@ -56,11 +56,18 @@ std::vector<Literal> MemModelComputationClient::TransferFromServer(
 ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     ComputationClient::CompileInstance instance) {
   auto* computation = static_cast<GenericComputationMemModel*>(instance.computation.get());
-  
-  // TODO: implement this function. It should analyze the graph and build the mem model. 
+
+  // Walk the graph and get the use count of each node. 
+  // We cannot leverage the use count in lazy tensor IR because over there the
+  // uses are maintained in a set, which will cause issues for our analysis. 
+  std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> use_cnts = AnalyzeUseCount(
+    computation->GetTensors(), computation->GetPostOrderNodes());
+
+  // Analyze the graph and build the mem model. 
   double peak_mem_mbs = CalculatePeakMem(computation->GetTensors(), 
                                          computation->GetPostOrderNodes(),
-                                         computation->GetParamsData());
+                                         computation->GetParamsData(),
+                                         use_cnts);
   
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
                                                    ConsumeValue(instance.computation->GetProgramShape()),
@@ -83,6 +90,23 @@ lazy_tensors::ComputationClient* MemModelGet() {
 lazy_tensors::ComputationClient* MemModelGetIfInitialized() {
   using namespace lazy_tensors;
   return MemModelGet();
+}
+
+
+std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> AnalyzeUseCount(
+  const std::vector<torch_lazy_tensors::LazyTensor>& tensors,
+  const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes) {
+  std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> use_cnts;
+  for (auto* node : topo_sorted_nodes) {
+    use_cnts[node] = 0;
+    for (auto pred : node->operands()) {
+      const torch_lazy_tensors::ir::Node* pred_node = pred.node;
+      LTC_CHECK(use_cnts.count(pred_node)) << "Node " << pred_node->ToString() 
+                                           << " does not have use count!";
+      use_cnts[pred_node] += 1;
+    } 
+  }
+  return use_cnts;
 }
 
 int GetElementSizeInBytes(const PrimitiveType elem_ty) {
@@ -133,7 +157,8 @@ double CalculateMemFromShape(const lazy_tensors::Shape& shape) {
 
 double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tensors,
                         const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes,
-                        const std::vector<lazy_tensors::ComputationClient::DataPtr>& params) {
+                        const std::vector<lazy_tensors::ComputationClient::DataPtr>& params,
+                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts) {
 
   struct TensorInfo {
     TensorInfo(double size, int64_t uses) : size_mbs(size), use_cnt(uses) {}
@@ -144,7 +169,9 @@ double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tenso
   double curr_mem = 0.0;
   // Parameters persist in the memory
   for (auto param : params) {
-    curr_mem += CalculateMemFromShape(Shape(param->shape()));
+    double param_mem = CalculateMemFromShape(Shape(param->shape()));
+    LTC_LOG(INFO) << "Add curr_mem: " << param_mem << " MBs";
+    curr_mem += param_mem;
   }
 
   double peak_mem = curr_mem;
@@ -157,22 +184,30 @@ double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tenso
   // Assuming all nodes are sorted in topological order and the ops will be executed 
   // exactly in this order
   for (auto* node : topo_sorted_nodes) {
+    LTC_LOG(INFO) << "Analyzing node " << node->ToString() 
+                  << ", uses: " << node->uses().size();
+    for (auto use : node->uses()) 
+      LTC_LOG(INFO) << use.node->ToString();
     // Step 1: Purge any tensors that can be freed
     for (auto dead_node_with_size : to_be_freed) {
       live_tensors.erase(dead_node_with_size.first);
       curr_mem -= dead_node_with_size.second;
+      LTC_LOG(INFO) << "Erase dead node " << dead_node_with_size.first->ToString() << " for " 
+                    << dead_node_with_size.second << " MBs memory";
     }
     to_be_freed.clear();
 
     // Step 2: Add the output of the current op to the live set and increment current memory
     double outp_size = CalculateMemFromShape(node->shape());
-    live_tensors.insert(std::make_pair(node, TensorInfo(outp_size, node->uses().size())));
+    LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
+    live_tensors.insert(std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node))));
     curr_mem += outp_size;
     // Step 3: Check predecessors, add tensors that have zero use count to the free list
     for (auto pred : node->operands()) {
       const torch_lazy_tensors::ir::Node* pred_node = pred.node;
       LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
       auto& pred_node_info = live_tensors.at(pred_node);
+      LTC_CHECK(pred_node_info.use_cnt >= 1) << "Predecessor " << pred_node->ToString() << " is already dead but in live set!";
       pred_node_info.use_cnt --;
       if (pred_node_info.use_cnt == 0) {
         to_be_freed.push_back(std::make_pair(pred_node, pred_node_info.size_mbs));
@@ -181,6 +216,7 @@ double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tenso
     // Step 4: Maintain peak memory
     peak_mem = (peak_mem > curr_mem) ? peak_mem : curr_mem;
   }
+  LTC_LOG(INFO) << "Peak memory: " << peak_mem << "MBs";
   return peak_mem;
 }
 }
