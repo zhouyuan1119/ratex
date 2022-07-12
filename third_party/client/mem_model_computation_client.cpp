@@ -17,6 +17,7 @@
 
 #include "lazy_tensors/computation_client/nnc_computation_client.h"
 #include "lazy_tensor_core/csrc/device.h"
+#include "lazy_tensor_core/csrc/ops/ltc_ops.h"
 
 namespace ratex {
 
@@ -154,6 +155,11 @@ double CalculateMemFromShape(const lazy_tensors::Shape& shape) {
   return size / 1048576.0;
 }
 
+bool IsInplaceOp(const c10::Symbol op) {
+  // Currently we treat all ops whose names end with an underscore as in-place ops
+  std::string op_name = std::string(op.toQualString());
+  return op_name.back() == '_';
+}
 
 double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tensors,
                         const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes,
@@ -201,14 +207,21 @@ double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tenso
     double outp_size = CalculateMemFromShape(node->shape());
     LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
     live_tensors.insert(std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node))));
-    curr_mem += outp_size;
+    // Don't count parameters because their memory is already included
+    // Here we treat all tensors allocated by device_data() as parameters
+    // Also don't increment memory for in-place ops
+    if ((node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) && (!IsInplaceOp(node->op().op)))
+      curr_mem += outp_size;
+
     // Step 3: Check predecessors, add tensors that have zero use count to the free list
     for (auto pred : node->operands()) {
       const torch_lazy_tensors::ir::Node* pred_node = pred.node;
       LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
       auto& pred_node_info = live_tensors.at(pred_node);
       LTC_CHECK(pred_node_info.use_cnt >= 1) << "Predecessor " << pred_node->ToString() << " is already dead but in live set!";
-      pred_node_info.use_cnt --;
+      // Again, don't change the use count of parameters
+      if (pred_node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data)
+        pred_node_info.use_cnt --;
       if (pred_node_info.use_cnt == 0) {
         to_be_freed.push_back(std::make_pair(pred_node, pred_node_info.size_mbs));
       }
