@@ -51,7 +51,7 @@ def train(device, model, image_datasets):
     model.train()
     criterion = lambda pred, true: nn.functional.nll_loss(nn.LogSoftmax(dim=-1)(pred), true)
     optimizer = optim.SGD(model.parameters(), lr=0.001)
-    num_epochs = 2
+    num_epochs = 1
     best_acc = 0.0
     unscripted = model
     for epoch in range(num_epochs):
@@ -61,6 +61,7 @@ def train(device, model, image_datasets):
         running_corrects = 0
 
         # Iterate over data.
+        print("Batches: ", len(dataloaders["train"]))
         for inputs, labels in dataloaders["train"]:
             inputs = inputs.to(device)
             inputs.requires_grad = True
@@ -78,6 +79,8 @@ def train(device, model, image_datasets):
             optimizer.step()
             lm.mark_step()
             running_loss += loss.item() * inputs.size(0)
+            print('Running loss: ', running_loss)
+            print(model.linear1.weight)
             # running_corrects += torch.sum(preds == labels.data)
 
         epoch_loss = running_loss / dataset_sizes["train"]

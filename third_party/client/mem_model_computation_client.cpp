@@ -48,7 +48,65 @@ std::vector<Literal> MemModelComputationClient::TransferFromServer(
   std::vector<Literal> results;
   for (const auto& handle : handles) {
     auto* ptr = static_cast<BaseData*>(handle.get());
+    LTC_LOG(INFO) << "TransferFromServer: shape = " << Shape(ptr->shape()).ToString();
     Literal res(ptr->shape());
+    LTC_CHECK(ptr->shape().element_shapes().size() == 0) << "Tuple is not supported!";
+    auto dtype = ptr->shape().element_type();
+    // If this tensor is a parameter, then we don't allocate memory for it because it should
+    // already bound to some memory. We are using new here and may have some memory leaks. To 
+    // be fixed later. 
+    if (!ptr->is_param) {
+      int64_t n_elements = res.value().numel();
+      switch(dtype) {
+        case PrimitiveType::S8: {
+          const int8_t* buf = new int8_t[n_elements]();
+          res.PopulateR1<int8_t>(Span<const int8_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::U8: {
+          const uint8_t* buf = new uint8_t[n_elements]();
+          res.PopulateR1<uint8_t>(Span<const uint8_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::PRED: {
+          const bool* buf = new bool[n_elements]();
+          res.PopulateR1<bool>(Span<const bool>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::S32: {
+          const int32_t* buf = new int32_t[n_elements]();
+          res.PopulateR1<int32_t>(Span<const int32_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::U32: {
+          const uint32_t* buf = new uint32_t[n_elements]();
+          res.PopulateR1<uint32_t>(Span<const uint32_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::F32: {
+          const float* buf = new float[n_elements]();
+          res.PopulateR1<float>(Span<const float>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::S64: {
+          const int64_t* buf = new int64_t[n_elements]();
+          res.PopulateR1<int64_t>(Span<const int64_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::U64: {
+          const uint64_t* buf = new uint64_t[n_elements]();
+          res.PopulateR1<uint64_t>(Span<const uint64_t>(buf, n_elements));
+          break;
+        }
+        case PrimitiveType::F64: {
+          const double* buf = new double[n_elements]();
+          res.PopulateR1<double>(Span<const double>(buf, n_elements));
+          break;
+        }
+        default:
+          LTC_LOG(FATAL) << "NotImplementedError: " << dtype;
+      }
+    }
     results.push_back(res);
   }
   return results;
@@ -58,17 +116,26 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     ComputationClient::CompileInstance instance) {
   auto* computation = static_cast<GenericComputationMemModel*>(instance.computation.get());
 
+  auto tensors = computation->GetTensors();
+  auto post_order_nodes = computation->GetPostOrderNodes();
+  auto params = computation->GetParamsData();
+
   // Walk the graph and get the use count of each node. 
   // We cannot leverage the use count in lazy tensor IR because over there the
   // uses are maintained in a set, which will cause issues for our analysis. 
-  std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> use_cnts = AnalyzeUseCount(
-    computation->GetTensors(), computation->GetPostOrderNodes());
+  auto use_cnts = AnalyzeUseCount(post_order_nodes);
+
+  // Collect information for correctly calculating memory with in-place updates
+  auto param_tensor_ids = GetParameterTensorIds(params);
+  auto node_tensor_map = GetNodeTensorIdMap(tensors);
 
   // Analyze the graph and build the mem model. 
-  double peak_mem_mbs = CalculatePeakMem(computation->GetTensors(), 
-                                         computation->GetPostOrderNodes(),
-                                         computation->GetParamsData(),
-                                         use_cnts);
+  double peak_mem_mbs = CalculatePeakMem(tensors, 
+                                         post_order_nodes,
+                                         params,
+                                         use_cnts,
+                                         param_tensor_ids,
+                                         node_tensor_map);
   
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
                                                    ConsumeValue(instance.computation->GetProgramShape()),
@@ -95,7 +162,6 @@ lazy_tensors::ComputationClient* MemModelGetIfInitialized() {
 
 
 std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> AnalyzeUseCount(
-  const std::vector<torch_lazy_tensors::LazyTensor>& tensors,
   const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes) {
   std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> use_cnts;
   for (auto* node : topo_sorted_nodes) {
@@ -161,10 +227,47 @@ bool IsInplaceOp(const c10::Symbol op) {
   return op_name.back() == '_';
 }
 
+std::unordered_set<int64_t> GetParameterTensorIds(
+  const std::vector<lazy_tensors::ComputationClient::DataPtr>& params) {
+  std::unordered_set<int64_t> param_tensor_ids;
+  for (auto param : params) {
+    auto* data_info = dynamic_cast<torch_lazy_tensors::DeviceDataInfo*>(param->info());
+    if (data_info != nullptr) {
+      param_tensor_ids.insert(data_info->tensor_id);
+    }
+  }
+  return param_tensor_ids;  
+}
+
+std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> GetNodeTensorIdMap(
+  const std::vector<torch_lazy_tensors::LazyTensor>& tensors) {
+  std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> output_tensor_ids;
+  for (auto t : tensors) {
+    int64_t tid = t.GetUniqueId();
+    auto node = t.CurrentIrValue().node.get();
+    if (!output_tensor_ids.count(node)) {
+      output_tensor_ids.insert(std::make_pair(node, tid));
+    } else {
+      LTC_LOG(FATAL) << "Node " << node->ToString() << " has multiple outputs!";
+    }
+  }
+  return output_tensor_ids;
+}
+
+bool IsSharingWithParam(const torch_lazy_tensors::ir::Node* node,
+                        const std::unordered_set<int64_t>& param_tensor_ids,
+                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& node_tensor_map) {
+  if (node_tensor_map.count(node)) 
+    return param_tensor_ids.count(node_tensor_map.at(node));
+  return false;
+}
+
 double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tensors,
                         const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes,
                         const std::vector<lazy_tensors::ComputationClient::DataPtr>& params,
-                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts) {
+                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts,
+                        const std::unordered_set<int64_t>& param_tensor_ids,
+                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& node_tensor_map) {
 
   struct TensorInfo {
     TensorInfo(double size, int64_t uses) : size_mbs(size), use_cnt(uses) {}
@@ -219,8 +322,9 @@ double CalculatePeakMem(const std::vector<torch_lazy_tensors::LazyTensor>& tenso
       LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
       auto& pred_node_info = live_tensors.at(pred_node);
       LTC_CHECK(pred_node_info.use_cnt >= 1) << "Predecessor " << pred_node->ToString() << " is already dead but in live set!";
-      // Again, don't change the use count of parameters
-      if (pred_node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data)
+      // Again, don't change the use count of parameters or nodes whose outputs share memory with parameters
+      if ((pred_node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) && 
+          !IsSharingWithParam(pred_node, param_tensor_ids, node_tensor_map))
         pred_node_info.use_cnt --;
       if (pred_node_info.use_cnt == 0) {
         to_be_freed.push_back(std::make_pair(pred_node, pred_node_info.size_mbs));

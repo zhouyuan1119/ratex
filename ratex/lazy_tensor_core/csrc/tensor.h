@@ -29,6 +29,14 @@
 
 namespace torch_lazy_tensors {
 
+struct DeviceDataInfo : public lazy_tensors::client::Data::Info {
+  DeviceDataInfo(int64_t tensor_id, bool read_only) : tensor_id(tensor_id), read_only(read_only) {
+  }
+
+  int64_t tensor_id = 0;
+  bool read_only = false;
+};
+
 class LazyTensor {
   class DeviceContextArena;
   struct Data;
