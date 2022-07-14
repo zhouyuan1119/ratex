@@ -80,7 +80,7 @@ def train(device, model, image_datasets):
             lm.mark_step()
             running_loss += loss.item() * inputs.size(0)
             print('Running loss: ', running_loss)
-            print(model.linear1.weight)
+            print('Peak memory: ', lm.get_peak_memory())
             # running_corrects += torch.sum(preds == labels.data)
 
         epoch_loss = running_loss / dataset_sizes["train"]
@@ -105,7 +105,7 @@ def main():
     }
     image_datasets = {
         x: datasets.FakeData(
-            size=1, image_size=(1, 4, 4), num_classes=10, transform=data_transforms[x]
+            size=2, image_size=(1, 4, 4), num_classes=10, transform=data_transforms[x]
         )
         for x in ["train", "val"]
     }

@@ -114,20 +114,26 @@ std::vector<Literal> MemModelComputationClient::TransferFromServer(
 
 ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     ComputationClient::CompileInstance instance) {
+  LTC_LOG(INFO) << "In MemModelComputationClient::Compile";
   auto* computation = static_cast<GenericComputationMemModel*>(instance.computation.get());
+  LTC_LOG(INFO) << "Got computation!";
 
   auto tensors = computation->GetTensors();
   auto post_order_nodes = computation->GetPostOrderNodes();
   auto params = computation->GetParamsData();
+  LTC_LOG(INFO) << "Got info!";
 
   // Walk the graph and get the use count of each node. 
   // We cannot leverage the use count in lazy tensor IR because over there the
   // uses are maintained in a set, which will cause issues for our analysis. 
   auto use_cnts = AnalyzeUseCount(post_order_nodes);
+  LTC_LOG(INFO) << "Got use counts!";
 
   // Collect information for correctly calculating memory with in-place updates
   auto param_tensor_ids = GetParameterTensorIds(params);
+  LTC_LOG(INFO) << "Got parameter ids!";
   auto node_tensor_map = GetNodeTensorIdMap(tensors);
+  LTC_LOG(INFO) << "Got node tensor id map!";
 
   // Analyze the graph and build the mem model. 
   double peak_mem_mbs = CalculatePeakMem(tensors, 
@@ -136,7 +142,8 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
                                          use_cnts,
                                          param_tensor_ids,
                                          node_tensor_map);
-  
+  peak_memory_ = peak_mem_mbs;
+
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
                                                    ConsumeValue(instance.computation->GetProgramShape()),
                                                    instance.devices, peak_mem_mbs);
@@ -244,7 +251,9 @@ std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> GetNodeTensorId
   std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> output_tensor_ids;
   for (auto t : tensors) {
     int64_t tid = t.GetUniqueId();
-    auto node = t.CurrentIrValue().node.get();
+    auto node = t.GetIrValue().node.get();
+    LTC_LOG(INFO) << tid << " " << node;
+    LTC_LOG(INFO) << node->ToString();
     if (!output_tensor_ids.count(node)) {
       output_tensor_ids.insert(std::make_pair(node, tid));
     } else {

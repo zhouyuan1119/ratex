@@ -654,6 +654,8 @@ void InitLtcModuleBindings(py::module m) {
   m.def("_ltc_memory_info",
         [](const std::string& device) -> py::object { return GetMemoryInfo(device); });
   m.def("_ltc_clear_jit_cache", []() { LazyTensor::GetComputationCache()->Clear(); });
+  m.def("_ltc_get_peak_memory",
+        [] () { return lazy_tensors::ComputationClient::Get()->GetPeakMemory(); });
 }
 
 }  // namespace

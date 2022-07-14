@@ -1510,12 +1510,14 @@ LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>&
   std::shared_ptr<lazy_tensors::GenericComputation> computation(
     std::make_shared<compiler::mem_model_lowering_backend::GenericComputationMemModel>(
       tensors, po_data->post_order, po_data->parameters_data));
+  LTC_VLOG(3) << "Created computation!";
   // Compute program shape so we can feed into Compile()
   lazy_tensors::ProgramShape program_shape = ConsumeValue(computation->GetProgramShape());
+  LTC_VLOG(3) << "Got program shape!";
   LTC_CHECK_EQ(program_shape.parameters_size(), po_data->parameters_data.size());
   lazy_tensors::Shape shape =
       MakeShapeWithDeviceLayout(program_shape.result(), coll.device.hw_type);
-  
+  LTC_VLOG(3) << "Made shape!";
   std::vector<lazy_tensors::ComputationClient::CompileInstance> instances;
   instances.push_back(
     lazy_tensors::ComputationClient::CompileInstance(
@@ -1524,6 +1526,7 @@ LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>&
       lazy_tensors::ComputationClient::Get()->GetCompilationDevices(coll.device.ToString(), devices),
       &shape)
   );
+  LTC_VLOG(3) << "Created compile instance!";
 
   // Actually compile the program, in our case we will compute peak memory
   std::vector<std::shared_ptr<lazy_tensors::ComputationClient::Computation>> computations =

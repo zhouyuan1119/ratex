@@ -236,6 +236,8 @@ class ComputationClient {
 
   static ComputationClient* GetIfInitialized();
 
+  virtual double GetPeakMemory() { return 0; }
+
  protected:
   // Metrics common to all client interfaces.
   static metrics::Metric* TransferToServerMetric();

@@ -108,6 +108,12 @@ class MemModelComputationClient : public BaseComputationClient {
                                           lazy_tensors::Span<const DataPtr> arguments,
                                           const std::string& device,
                                           const ExecuteComputationOptions& options) override;
+  
+  /*! \brief Interface function to get the peak memory */
+  virtual double GetPeakMemory() override { return peak_memory_; }
+ private:
+  /*! \brief Peak memory maintained by this client. */
+  double peak_memory_ = 0.0;
 };
 
 lazy_tensors::ComputationClient* MemModelGet();
