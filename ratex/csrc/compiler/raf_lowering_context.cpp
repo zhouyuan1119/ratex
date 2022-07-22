@@ -172,18 +172,18 @@ void RAFLoweringContext::SetUpAlias(const lazy_tensors::ShapeIndex& output_index
 }  // namespace raf_backend
 }  // namespace compiler
 
-namespace ir {
-
-std::unique_ptr<LoweringContext> LoweringContext::Create(
-    const std::string& name, Device device, lazy_tensors::Span<const Node* const> post_order,
-    Util::EmissionMap emit_status) {
-  return std::make_unique<compiler::raf_backend::RAFLoweringContext>(name, device, post_order,
-                                                                     emit_status);
-}
-
-std::unique_ptr<LoweringContext> LoweringContext::Create(const std::string& name, Device device) {
-  return std::make_unique<compiler::raf_backend::RAFLoweringContext>(name, device);
-}
-
-}  // namespace ir
+// namespace ir {
+// 
+// std::unique_ptr<LoweringContext> LoweringContext::Create(
+//     const std::string& name, Device device, lazy_tensors::Span<const Node* const> post_order,
+//     Util::EmissionMap emit_status) {
+//   return std::make_unique<compiler::raf_backend::RAFLoweringContext>(name, device, post_order,
+//                                                                      emit_status);
+// }
+// 
+// std::unique_ptr<LoweringContext> LoweringContext::Create(const std::string& name, Device device) {
+//   return std::make_unique<compiler::raf_backend::RAFLoweringContext>(name, device);
+// }
+// 
+// }  // namespace ir
 }  // namespace torch_lazy_tensors

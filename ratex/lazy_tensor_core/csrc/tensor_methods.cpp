@@ -150,6 +150,7 @@ struct MinMaxValues {
 };
 
 ir::Value MaybeExpand(const ir::Value& input, const lazy_tensors::Shape& target_shape) {
+  LTC_LOG(INFO) << "MaybeExpand";
   if (input.shape().dimensions() == target_shape.dimensions()) {
     return input;
   }
@@ -1035,6 +1036,7 @@ LazyTensor LazyTensor::exp(const LazyTensor& input) {
 }
 
 LazyTensor LazyTensor::expand(const LazyTensor& input, std::vector<int64_t> size) {
+  LTC_LOG(INFO) << "Creating expand... ";
   auto input_shape = input.shape();
   return input.CreateFrom(ir::MakeNode<ir::ops::Expand>(
       input.GetIrValue(), GetExpandDimensions(input_shape.get(), std::move(size))));
@@ -1772,6 +1774,7 @@ LazyTensor LazyTensor::reflection_pad2d_backward(const LazyTensor& grad_output,
 }
 
 LazyTensor LazyTensor::relu(const LazyTensor& input) {
+  LTC_LOG(INFO) << "Create Relu";
   return input.CreateFrom(ir::ops::ReluOp(input.GetIrValue()));
 }
 

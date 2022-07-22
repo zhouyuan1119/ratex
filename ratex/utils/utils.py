@@ -141,5 +141,5 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         loss.backward()
         optimizer.step()
         print(torch.cuda.max_memory_allocated() / (1024*1024))
-
+        print(torch.cuda.memory_summary())
     return torch.cuda.max_memory_allocated()

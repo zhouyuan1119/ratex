@@ -221,6 +221,10 @@ class Node {
     return num_outputs_;
   }
 
+  uint64_t id() const {
+    return id_;
+  }
+
   // Retrieves the full shape of the IR Node. Note that if this is a
   // multi-output node, the returned shape will be a tuple.
   const lazy_tensors::Shape& shape() const {
@@ -291,6 +295,9 @@ class Node {
 
   static std::vector<SourceLocation> GetFrameInfo();
 
+  // The ID to be assigned to the next created node
+  static uint64_t latest_id_;
+
   // The ID of the operation captured by this node.
   OpKind op_;
   size_t num_outputs_ = 1;
@@ -311,6 +318,9 @@ class Node {
   // The IR framework user can attach a user defined metadata object deriving
   // from UserMetaData.
   std::shared_ptr<UserMetaData> user_metadata_;
+  // This ID represents when this node is created. Smaller ID means created earlier,
+  // thus executed earlier in native PyTorch. Used to analyze memory consumption. 
+  uint64_t id_;
 };
 
 // RAII data structure to be used a stack variable to enter a new IR scope. IR

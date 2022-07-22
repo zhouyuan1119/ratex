@@ -196,6 +196,7 @@ CanonicalIndexInfo GetCanonicalIndexInfo(const at::Tensor& base,
 }
 
 ir::Value EnsureRank1(const ir::Value& index) {
+  LTC_LOG(INFO) << "EnsureRank1";
   LTC_CHECK_LE(index->shape().rank(), 1);
   return index->shape().rank() == 0 ? ir::MakeNode<ir::ops::Expand>(index, std::vector<int64_t>{1})
                                     : index;

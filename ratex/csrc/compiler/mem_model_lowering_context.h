@@ -10,6 +10,9 @@
 #include "lazy_tensor_core/csrc/compiler/node_lowering.h"
 #include "lazy_tensor_core/csrc/lowering_context.h"
 #include "lazy_tensor_core/csrc/tensor.h"
+#include "client/base_computation_client.h"
+#include "lazy_tensor_core/csrc/ops/device_data.h"
+#include "lazy_tensor_core/csrc/ops/ltc_ops.h"
 
 namespace torch_lazy_tensors {
 namespace compiler {
@@ -18,72 +21,97 @@ namespace mem_model_lowering_backend {
 /*! \brief Dummy computation class to satisfy interface requirements. */
 class GenericComputationMemModel : public lazy_tensors::GenericComputation {
  public:
-  GenericComputationMemModel(const std::vector<LazyTensor>& tensors, 
-                             const std::vector<const ir::Node*> post_order,
-                             const std::vector<lazy_tensors::ComputationClient::DataPtr> parameters_data)
-  : tensors_(tensors), post_order_(post_order), parameters_data_(parameters_data) {}
+  GenericComputationMemModel(
+    const std::vector<const ir::Node*>& nodes,
+    const std::vector<const ir::Node*>& parameters,
+    const std::vector<const ir::Node*>& outputs,
+    const std::unordered_map<int64_t, int64_t>& alias)
+  : nodes_(nodes), parameters_(parameters), outputs_(outputs), alias_(alias) {}
 
   /*! \brief Returns the type of the function, i.e. (param_0_ty, param_1_ty, ...) -> ret_ty */
   lazy_tensors::StatusOr<lazy_tensors::ProgramShape> GetProgramShape() const override;
 
-  // Interface functions to read private members
-  std::vector<LazyTensor> GetTensors() {
-    return tensors_;
-  }
-
-  std::vector<const ir::Node*> GetPostOrderNodes() {
-    return post_order_;
-  }
-
-  std::vector<lazy_tensors::ComputationClient::DataPtr> GetParamsData() {
-    return parameters_data_;
-  }
+  /*! \brief Some interface functions to retrieve the private members */
+  const std::vector<const ir::Node*> GetPostOrderNodes() { return nodes_; }
+  const std::unordered_map<int64_t, int64_t> GetAlias() { return alias_; }
+  const std::vector<const ir::Node*> GetOutputs() { return outputs_; }
+  const std::vector<const ir::Node*> GetParameters() { return parameters_; };
 
  private:
-  /*! \brief The list of tensors in this computation */
-  std::vector<LazyTensor> tensors_;
-  /*! \brief Operators (IR nodes) in topological order */
-  std::vector<const ir::Node*> post_order_;
-  /*! \brief Parameter information */
-  std::vector<lazy_tensors::ComputationClient::DataPtr> parameters_data_;
-
+  /*! \brief A list of nodes, sorted in topological order. */
+  std::vector<const ir::Node*> nodes_;
+  /*! \brief Collection of parameter nodes. Maps from handles to ir nodes. */
+  std::vector<const ir::Node*> parameters_;
+  /*! \brief A vector of outputs. We treat all live tensors as outputs. */
+  std::vector<const ir::Node*> outputs_;
+  /*! \brief maps output to input if they are aliased */
+  std::unordered_map<int64_t, int64_t> alias_;
 };
 
-// class MemModelLoweringContext : public ir::LoweringContext {
-//  public:
-//   MemModelLoweringContext(const std::string& name, Device device) : ir::LoweringContext(name, device) {
-//   }
-// 
-//   MemModelLoweringContext(const std::string& name, Device device,
-//                      absl::Span<const ir::Node* const> post_order,
-//                      ir::Util::EmissionMap emit_status)
-//       : ir::LoweringContext(name, device, post_order, emit_status) {
-//     auto lowering = NodeLowering::Create(this);
-//     for (auto node : post_order) {
-//       bool ok = lowering->Lower(node);
-//       LTC_CHECK(ok) << "Failed to lower: " << *node;
-//     }
-//   }
-// 
-//   lazy_tensors::Shape GetResultShape(size_t index) const override;
-// 
-//   size_t AddResult(const ir::Output& output) override;
-// 
-//   lazy_tensors::StatusOr<std::shared_ptr<lazy_tensors::GenericComputation>> Build() override;
-// 
-//   void LowerNodeToResult(const ir::Node* node) override;
-// 
-//   // void AddParameter(const ir::Output& output, size_t index,
-//   //                   const lazy_tensors::Shape& shape,
-//   //                   const std::string& name) override;
-// 
-//   void SetUpAlias(const lazy_tensors::ShapeIndex& output_index, int64_t param_number,
-//                   const lazy_tensors::ShapeIndex& param_index) override;
-// 
-// };
+class MemModelLoweringContext : public ir::LoweringContext {
+ public:
+  MemModelLoweringContext(const std::string& name, Device device) : ir::LoweringContext(name, device) {
+  }
 
-/*! \brief A completely dummy function to satisfy interface requirements. */
-// ir::Node* LowerNodeForMemModel(const ir::Node* node, MemModelLoweringContext* loctx);
+  MemModelLoweringContext(const std::string& name, Device device,
+                     absl::Span<const ir::Node* const> post_order,
+                     ir::Util::EmissionMap emit_status)
+      : ir::LoweringContext(name, device, post_order, emit_status) {
+    // Sort the post order nodes in-place here
+    // It is not used in the constructor of LoweringContext
+    nodes_.insert(nodes_.end(), post_order.begin(), post_order.end());
+    std::sort(nodes_.begin(), nodes_.end(), CompareNodes);
+    for (auto node : nodes_) {
+      // nodes_.push_back(node);
+      // Collect all parameter nodes
+      if (node->op() == *torch_lazy_tensors::ir::ops::ltc_device_data) {
+        auto device_data_node = ir::NodeCast<ir::ops::DeviceData>(node, *ir::ops::ltc_device_data);
+        // Add the node into parameters
+        parameters_.push_back(device_data_node->data());
+        parameters_nodes_.push_back(node);
+      }
+    }
+  }
+
+  /*! 
+   * \brief Get the output shape of the tensor at the provided index. 
+   * e.g., GetResultShape(3) would return the shape of the 3rd output tensor. 
+   * The order is the same with the order these tensors are added via AddResult(). 
+   */
+  lazy_tensors::Shape GetResultShape(size_t index) const override;
+
+  /*! \brief Add one output to the lowering context. We maintain all outputs in a vector. */
+  size_t AddResult(const ir::Output& output) override;
+
+  /*! \brief Generate a GenericComputationMemModel from this lowering context. */
+  lazy_tensors::StatusOr<std::shared_ptr<lazy_tensors::GenericComputation>> Build() override;
+
+  // This function is not implemented, do not use
+  void LowerNodeToResult(const ir::Node* node) override;
+
+  /* We don't implement the GetOutputOp(), AssignOutputOp(), and GetParameter() methods as in 
+   * RAFLoweringContext because we don't actually do any lowering. */
+
+  void SetUpAlias(const lazy_tensors::ShapeIndex& output_index, int64_t param_number,
+                  const lazy_tensors::ShapeIndex& param_index) override;
+
+ private:
+  /*! \brief A utility for properly sorting the IR nodes. */
+  static bool CompareNodes(const ir::Node* const node0, const ir::Node* const node1) {
+    return node0->id() < node1->id();
+  }
+
+  /*! \brief A list of nodes, sorted in topological order. */
+  std::vector<const ir::Node*> nodes_;
+  /*! \brief A list of parameter nodes. */
+  std::vector<const ir::Node*> parameters_nodes_;
+  /*! \brief Collection of model states (weights). */
+  std::unordered_set<const ir::Node*> model_states_;
+  /*! \brief A vector of outputs. We treat all live tensors as outputs. */
+  std::vector<const ir::Node*> outputs_;
+  /*! \brief maps output to input if they are aliased */
+  std::unordered_map<int64_t, int64_t> alias_;
+};
 
 }  // namespace raf_backend
 }  // namespace compiler

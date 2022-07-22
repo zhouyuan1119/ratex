@@ -1297,6 +1297,7 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
       return InferGt(node);
     }
     case at::aten::expand: {
+      LTC_LOG(INFO) << "RAF expand";
       return InferExpand(ir::NodeCast<ir::ops::Expand>(node, ir::OpKind(at::aten::expand)));
     }
     case at::aten::nll_loss: {

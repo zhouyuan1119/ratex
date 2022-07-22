@@ -72,6 +72,7 @@ bool IsLtcTensor(const at::Tensor& tensor) {
 }
 
 LazyTensor GetLtcTensor(const at::Tensor& tensor) {
+  LTC_LOG(INFO) << "GetLtcTensor: " << tensor.toString();
   auto xtensor = TryGetLtcTensor(tensor);
   LTC_CHECK(xtensor) << "Input tensor is not a lazy tensor: " << tensor.toString();
   return *xtensor;

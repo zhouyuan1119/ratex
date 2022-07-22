@@ -23,21 +23,15 @@ import copy
 from ratex.utils.utils import analyze_training_peak_memory, profile_training_peak_memory
 
 class TorchMLP(nn.Module):
-    def __init__(self, input_shape=16, num_classes=10):
+    def __init__(self, input_shape=256, num_classes=8):
         super(TorchMLP, self).__init__()
-        self.linear1 = nn.Linear(input_shape, 120)
-        self.linear2 = nn.Linear(120, 84)
-        self.linear3 = nn.Linear(84, 84)
-        self.linear4 = nn.Linear(84, num_classes)
+        self.linear1 = nn.Linear(input_shape, 128, bias=False)
+        self.linear2 = nn.Linear(128, num_classes, bias=False)
 
     def forward(self, x):
         out = self.linear1(x)
         out = torch.relu(out)  # pylint: disable=no-member
         out = self.linear2(out)
-        out = torch.relu(out)  # pylint: disable=no-member
-        out = self.linear3(out)
-        out = torch.relu(out)
-        out = self.linear4(out)
         return out
 
 
@@ -95,11 +89,11 @@ def main():
     model_cuda = copy.deepcopy(model_lt)
     optimizer = optim.SGD(model_lt.parameters(), lr=0.001)
     peak_memory_mbs = analyze_training_peak_memory(
-        model_lt, optimizer, torch.nn.NLLLoss(), (4, 16), (4,), torch.float32, torch.int64, [0, 10])
+        model_lt, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8])
     print('Analyzed peak memory: ', peak_memory_mbs)
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_bs = profile_training_peak_memory(
-        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 16), (4,), torch.float32, torch.int64, [0, 10])
+        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8])
     peak_memory_mbs = peak_memory_bs / (1024 * 1024)
     print('Profiled peak memory: ', peak_memory_mbs)
 
