@@ -276,6 +276,9 @@ class Node {
 
   virtual NodePtr Clone(OpList operands) const;
 
+  // Reset the latest ID for the next round of compilation
+  static void ResetID();
+
  private:
   // Adds node's index output number as operand.
   void AddOperand(NodePtr node, size_t index = 0);

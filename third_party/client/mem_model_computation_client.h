@@ -18,7 +18,11 @@ using namespace lazy_tensors;
 
 /*! \brief A set of PyTorch in-place ops. */
 const std::unordered_set<std::string> pytorch_inplace_ops({
-  "aten::permute"
+});
+/*! \brief A set of PyTorch ops that only change the view of tensor but don't update tensors. */
+const std::unordered_set<std::string> pytorch_view_changing_ops({
+  "aten::permute",
+  "aten::expand"
 });
 
 /*!

@@ -147,6 +147,10 @@ lazy_tensors::hash_t OpKind::hash() const {
 
 uint64_t Node::latest_id_ = 0;
 
+void Node::ResetID() {
+  latest_id_ = 0;
+}
+
 Node::Node(OpKind op, OpList operands, lazy_tensors::Shape shape, size_t num_outputs,
            lazy_tensors::hash_t hash_seed)
     : op_(std::move(op)),
@@ -160,9 +164,9 @@ Node::Node(OpKind op, OpList operands, lazy_tensors::Shape shape, size_t num_out
     AddOperand(operand.node, operand.index);
     hash_ = lazy_tensors::util::HashCombine(hash_, operand.hash());
   }
-  LTC_LOG(INFO) << "Create node: " << this->ToString();
   this->id_ = latest_id_;
   latest_id_ ++;
+  // LTC_LOG(INFO) << "Create node: " << this->ToString();
 }
 
 Node::Node(OpKind op, OpList operands, const std::function<lazy_tensors::Shape()>& shape_fn,
@@ -189,9 +193,9 @@ Node::Node(OpKind op, lazy_tensors::Shape shape, size_t num_outputs, lazy_tensor
       hash_(node_hash_) {
   metadata_.scope = GetCurrentScope();
   metadata_.frame_info = GetFrameInfo();
-  LTC_LOG(INFO) << "Create leaf node: " << this->ToString();
   this->id_ = latest_id_;
   latest_id_ ++;
+  // LTC_LOG(INFO) << "Create leaf node: " << this->ToString();
 }
 
 Node::~Node() {

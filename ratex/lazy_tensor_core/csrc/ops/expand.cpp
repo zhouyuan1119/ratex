@@ -19,7 +19,6 @@ Expand::Expand(const Value& input, std::vector<int64_t> size)
     : Node(ir::OpKind(at::aten::expand), {input},
            /*num_outputs=*/1, lazy_tensors::util::MHash(size)),
       size_(std::move(size)) {
-  LTC_LOG(INFO) << "Constructor of Expand!";
   SetShapeDeferred([&]() { return compiler::NodeLowering::Get()->Infer(this); });
 }
 

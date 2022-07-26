@@ -34,68 +34,18 @@ class TorchMLP(nn.Module):
         out = self.linear2(out)
         return out
 
-
-def train(device, model, image_datasets):
-    dataloaders = {
-        x: torch.utils.data.DataLoader(
-            image_datasets[x], batch_size=1, shuffle=False, num_workers=1
-        )
-        for x in ["train", "val"]
-    }
-    dataset_sizes = {x: len(image_datasets[x]) for x in ["train", "val"]}
-    model = model.to(device, dtype=torch.float32)
-    model.train()
-    criterion = lambda pred, true: nn.functional.nll_loss(nn.LogSoftmax(dim=-1)(pred), true)
-    optimizer = optim.SGD(model.parameters(), lr=0.001)
-    num_epochs = 1
-    best_acc = 0.0
-    unscripted = model
-    for epoch in range(num_epochs):
-        print("Epoch {}/{}".format(epoch, num_epochs - 1))
-        print("-" * 10)
-        running_loss = 0.0
-        running_corrects = 0
-
-        # Iterate over data.
-        print("Batches: ", len(dataloaders["train"]))
-        for inputs, labels in dataloaders["train"]:
-            inputs = inputs.to(device)
-            inputs.requires_grad = True
-            labels_one_hot = torch.tensor(np.eye(10, dtype=np.float32)[labels])
-            labels_one_hot = labels_one_hot.to(device)  # One-hot
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            # _, preds = torch.max(outputs, 1)
-            # loss = criterion(outputs, labels)
-            # adapting loss cacluation from
-            # https://www.programmersought.com/article/86167037001/
-            # this doesn't match nn.NLLLoss() exactly, but close...
-            loss = -torch.sum(outputs * labels_one_hot) / inputs.size(0)
-            loss.backward()
-            optimizer.step()
-            lm.mark_step()
-            running_loss += loss.item() * inputs.size(0)
-            print('Running loss: ', running_loss)
-            print('Peak memory: ', lm.get_peak_memory())
-            # running_corrects += torch.sum(preds == labels.data)
-
-        epoch_loss = running_loss / dataset_sizes["train"]
-        epoch_acc = 0
-        print("{} Loss: {:.4f}".format("train", epoch_loss))
-
-
 def main():
     model_lt = TorchMLP()
     model_cuda = copy.deepcopy(model_lt)
     optimizer = optim.SGD(model_lt.parameters(), lr=0.001)
-    peak_memory_mbs = analyze_training_peak_memory(
-        model_lt, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8])
-    print('Analyzed peak memory: ', peak_memory_mbs)
+    # peak_memory_mbs = analyze_training_peak_memory(
+    #     model_lt, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8],
+    #     n_batches=2)
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_bs = profile_training_peak_memory(
-        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8])
+        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 256), (4,), torch.float32, torch.int64, [0, 8],
+        n_batches=5)
     peak_memory_mbs = peak_memory_bs / (1024 * 1024)
-    print('Profiled peak memory: ', peak_memory_mbs)
 
 if __name__ == "__main__":
     main()

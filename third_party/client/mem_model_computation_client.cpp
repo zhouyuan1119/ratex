@@ -114,9 +114,9 @@ std::vector<Literal> MemModelComputationClient::TransferFromServer(
 
 ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     ComputationClient::CompileInstance instance) {
-  LTC_LOG(INFO) << "In MemModelComputationClient::Compile";
+  // LTC_LOG(INFO) << "In MemModelComputationClient::Compile";
   auto* computation = static_cast<GenericComputationMemModel*>(instance.computation.get());
-  LTC_LOG(INFO) << "Got computation!";
+  // LTC_LOG(INFO) << "Got computation!";
 
   auto post_order_nodes = computation->GetPostOrderNodes();
   auto alias = computation->GetAlias();
@@ -126,13 +126,13 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     outputs_map.insert(std::make_pair(outputs[i], i));
   }
   auto params = computation->GetParameters();
-  LTC_LOG(INFO) << "Got info!";
+  // LTC_LOG(INFO) << "Got info!";
 
   // Walk the graph and get the use count of each node. 
   // We cannot leverage the use count in lazy tensor IR because over there the
   // uses are maintained in a set, which will cause issues for our analysis. 
   auto use_cnts = AnalyzeUseCount(post_order_nodes);
-  LTC_LOG(INFO) << "Got use counts!";
+  // LTC_LOG(INFO) << "Got use counts!";
 
   // Collect information for correctly calculating memory with in-place updates
   // auto param_tensor_ids = GetParameterTensorIds(params);
@@ -238,9 +238,11 @@ bool IsInplaceOp(const c10::Symbol op) {
   bool is_inplace = pytorch_inplace_ops.count(op_name) || (op_name.back() == '_');
   if (is_inplace)
     LTC_LOG(INFO) << "Op " << op_name << " is an in-place op!";
-  else
-    LTC_LOG(INFO) << "Op " << op_name << " is not an in-place op. ";
   return is_inplace;
+}
+
+bool IsViewChangingOp(const c10::Symbol op) {
+  return pytorch_view_changing_ops.count(std::string(op.toQualString()));
 }
 
 std::unordered_set<int64_t> GetParameterTensorIds(
@@ -287,7 +289,8 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                         const std::unordered_map<int64_t, int64_t>& alias,
                         const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts) {
   struct TensorInfo {
-    TensorInfo(double size, int64_t uses, bool param) : size_mbs(size), use_cnt(uses), is_param(param) {}
+    TensorInfo(double size, int64_t uses, bool param, const torch_lazy_tensors::ir::Node* orig_node) 
+    : size_mbs(size), use_cnt(uses), is_param(param), viewing(orig_node) {}
 
     // Size of tensor in MBs
     double size_mbs;
@@ -297,11 +300,15 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     bool is_param;
     // True if the tensor has undergone an in-place update and is replaced by a newer version
     bool is_expired = false;
+    // If this "tensor" is actually a view, keep a pointer to the original node that allocated memory
+    const torch_lazy_tensors::ir::Node* viewing;
+    // If this tensor has multiple views, keep a set of pointers to each view
+    std::unordered_set<const torch_lazy_tensors::ir::Node*> viewers = {};
   };
 
   double curr_mem = 0.0;
 
-  // Maintain the current set of live tensors, not including parameters since they are always live
+  // Maintain the current set of live tensors
   std::unordered_map<const torch_lazy_tensors::ir::Node*, TensorInfo> live_tensors;
   // A list of tensors that have reached the end of their lifetime, together with their sizes
   std::vector<std::pair<const torch_lazy_tensors::ir::Node*, double>> to_be_freed;
@@ -314,25 +321,45 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       LTC_LOG(INFO) << "Param: " << param_mem << " MBs";
       curr_mem += param_mem;
       // Insert parameters into the live set, they are never removed
-      live_tensors.insert(std::make_pair(param, TensorInfo(param_mem, use_cnts.at(param), true)));
+      live_tensors.insert(std::make_pair(param, TensorInfo(param_mem, use_cnts.at(param), true, nullptr)));
     }
   }
 
   double peak_mem = curr_mem;
 
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
-  // NOTICE THAT THE LATTER DOES NOT HOLD RIGHT NOW!!!
   for (auto* node : topo_sorted_nodes) {
-    LTC_LOG(INFO) << "Analyzing node " << node->ToString() 
-                  << ", uses: " << node->uses().size();
-    for (auto use : node->uses()) 
-      LTC_LOG(INFO) << use.node->ToString();
+    LTC_LOG(INFO) << "Analyzing node " << node->ToString() << ", uses: " << node->uses().size();
+
     // Step 1: Purge any tensors that can be freed
-    for (auto dead_node_with_size : to_be_freed) {
-      live_tensors.erase(dead_node_with_size.first);
-      curr_mem -= dead_node_with_size.second;
-      LTC_LOG(INFO) << "Erase dead node " << dead_node_with_size.first->ToString() << " for " 
-                    << dead_node_with_size.second << " MBs memory";
+    /* 
+     * A live tensor can be safely freed if:
+     * 1. It has a use count of zero;
+     * 2. It is not a parameter or aliasing with parameters;
+     * 3. It has not expired, otherwise its memory is taken over by another tensor and we free that
+     *    tensor later instead. 
+     * 4. All of its viewers have been deleted. 
+     */
+    // for (auto node_with_info : live_tensors) {
+    //   auto node_ptr = node_with_info.first;
+    //   auto& info = node_with_info.second;
+    //   if ((info.use_cnt <= 0) && (!info.is_param) && (!info.is_expired) && (info.viewers.size() == 0)) {
+    //     curr_mem -= info.size_mbs;
+    //     LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << info.size_mbs << " MBs memory";
+    //     live_tensors.erase(node_ptr);
+    //   }
+    // }
+    for (auto node_with_size : to_be_freed) {
+      auto node_ptr = node_with_size.first;
+      auto size_mbs = node_with_size.second;
+      auto& node_info = live_tensors.at(node_ptr);
+      LTC_CHECK(node_info.use_cnt <= 0) << "Node " << node_ptr->ToString() << " with use count of " << node_info.use_cnt << " is freed!";
+      LTC_CHECK(!node_info.is_param) << "Parameter node " << node_ptr->ToString() << " is freed!";
+      LTC_CHECK(!node_info.is_expired) << "Expired node " << node_ptr->ToString() << " is freed!";
+      LTC_CHECK(node_info.viewers.size() == 0) << "Node " << node_ptr->ToString() << " has " << node_info.viewers.size() << " viewers but is freed!";
+      curr_mem -= (node_info.viewing) ? 0.0 : size_mbs;
+      live_tensors.erase(node_ptr);
+      LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << size_mbs << " MBs memory";
     }
     to_be_freed.clear();
 
@@ -344,19 +371,23 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
      * There are several cases here:
      * 1. This node is device_data(), which means the memory is already added when processing parameters. 
      *    In this case we don't do anything. 
-     * 2. This node is not device_data(), but the op is an in-place op (e.g., permute). In this case
-     *    we don't increment memory, but update the TensorInfo associated with the input to reflect
-     *    the use count of the output. Right now we only support in-place ops with one input. 
-     * 3. This node is not device_data() nor an in-place op, but the output of the node shares memory 
-     *    with a parameter. This is defined by the alias map. In this case we don't increment memory, 
-     *    but update the TensorInfo associated with the parameter to reflect the use count of this 
-     *    tensor. THIS SHOULD NOT HAVE ISSUES IF THE IR ORDER IS THE SAME WITH PYTORCH EXECUTION ORDER, 
-     *    BUT MAY HAVE ISSUES BEFORE WE FIX THAT. 
-     * 4. This node is not device_data(), not an in-place op, and the output does not share memory
-     *    with a parameter. In this case we add the size of the output to curr_mem, and create a new
-     *    entry in live_tensors for this output. 
+     * 2. This node is not device_data(), but the op is an in-place op. In this case we don't increment 
+     *    memory, but make the tensor associated with the input "expired" and create a new entry in 
+     *    the live tensor set to represent the output. Right now we only support in-place ops with one 
+     *    input. 
+     * 3. This node is not device_data(), not an in-place op, but a "view-changing" op that changes 
+     *    the view of a tensor without modifying its data (e.g., permute). In this case we do the same
+     *    as above, except that the input tensor is not marked as expired. 
+     * 4. This node is not device_data() nor an in-place/view-changing op, but the output of the node 
+     *    shares memory with a parameter. This is defined by the alias map. In this case we don't increment 
+     *    memory, but update the TensorInfo associated with the parameter to reflect the use count of this 
+     *    tensor.  
+     * 5. This node is not device_data(), not an in-place/view-changin op, and the output does not share 
+     *    memory with a parameter. In this case we add the size of the output to curr_mem, and create 
+     *    a new entry in live_tensors for this output. 
      */
     bool is_inplace = false;
+    bool is_alias = false;
     if (node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) {
       // In-place op
       if (IsInplaceOp(node->op().op)) {
@@ -364,43 +395,86 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         LTC_CHECK(node->operands().size() == 1) << "In-place ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
         // Mark the entry of the input as expired
-        live_tensors.at(pred_node).is_expired = true;
-        LTC_CHECK(outp_size == live_tensors.at(pred_node).size_mbs) << "In-place update but tensor sizes mismatch: "
-          << outp_size << " vs. " << live_tensors.at(pred_node).size_mbs;
-        // Put a new entry
+        auto& pred_node_info = live_tensors.at(pred_node);
+        pred_node_info.is_expired = true;
+        LTC_CHECK(outp_size == pred_node_info.size_mbs) << "In-place update but tensor sizes mismatch: "
+          << outp_size << " vs. " << pred_node_info.size_mbs;
+        // Put a new entry. 
+        /*
+         * 1. If the predecessor is a parameter or aliases with a parameter, then the new tensor shares 
+         *    memory with a parameter. 
+         * 2. If the predecessor is a view, then we treat the new tensor as another view, although the
+         *    behavior of some ops might be undefined (e.g., doing an in-place ReLU on a view created
+         *    by an expand op). 
+         */
         live_tensors.insert(
-          std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node), live_tensors.at(pred_node).is_param))
+          std::make_pair(
+            node, 
+            TensorInfo(outp_size, use_cnts.at(node), pred_node_info.is_param, pred_node_info.viewing)
+          )
         );
+        if (pred_node_info.viewing) {
+          LTC_LOG(INFO) << "Warning: in-place op " << node->ToString() << " on a view " << pred_node->ToString();
+          live_tensors.at(pred_node_info.viewing).viewers.insert(node);
+        }
+      } else if (IsViewChangingOp(node->op().op)) {
+        LTC_CHECK(node->operands().size() == 1) << "View-changing ops with more than one inputs are currently not supported!";
+        auto pred_node = node->operands()[0].node;
+        auto& pred_node_info = live_tensors.at(pred_node);
+        // Put a new entry
+        /*
+         * 1. Similarly, we inherent the is_param field from the predecessor. 
+         * 2. Handle view-sharing differently based on whether the predecesor is a view or not. 
+         */
+        auto viewing_node = (pred_node_info.viewing) ? pred_node_info.viewing : pred_node;
+        live_tensors.insert(
+          std::make_pair(
+            node, 
+            TensorInfo(outp_size, use_cnts.at(node), pred_node_info.is_param, viewing_node)
+          )
+        );
+        live_tensors.at(viewing_node).viewers.insert(node);
       } else {
-        // Not in-place op, check for I/O param aliasing
+        // Not in-place op or view-changing op, check for I/O param aliasing
         if (outputs_map.count(node) && alias.count(outputs_map.at(node))) {
+          is_alias = true;
           // If there is I/O param aliasing, this is the output and mark the param as expired
           auto param_node = params.at(alias.at(outputs_map.at(node)));
-          live_tensors.at(param_node).is_expired = true;
-          LTC_CHECK(outp_size == live_tensors.at(param_node).size_mbs) << "I/O aliasing but tensor sizes mismatch: "
-            << outp_size << " vs. " << live_tensors.at(param_node).size_mbs;
+          auto& param_node_info = live_tensors.at(param_node);
+          param_node_info.is_expired = true;
+          LTC_CHECK(outp_size == param_node_info.size_mbs) << "I/O aliasing but tensor sizes mismatch: "
+            << outp_size << " vs. " << param_node_info.size_mbs;
           // Put a new entry
+          // In this case the new tensor cannot be viewing any other tensor
           live_tensors.insert(
-            std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node), true))
+            std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node), true, nullptr))
           );
         } else {
           // No parameter aliasing, add a new entry to live_tensors and increase memory consumption
           curr_mem += outp_size;
+          // Similarly, since the op is not a view-changing op, the new tensor is not a view of an
+          // existing tensor
           live_tensors.insert(
-            std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node), false))
+            std::make_pair(node, TensorInfo(outp_size, use_cnts.at(node), false, nullptr))
           );
         }
       }
     }
 
-    // Step 3: Check predecessors, add tensors that have zero use count to the free list
+    // Step 3: Maintain peak memory. The output size of this op has been added, and all tensors that
+    // are no longer useful before this op have been freed at this point. 
+    peak_mem = (peak_mem > curr_mem) ? peak_mem : curr_mem;
+    LTC_LOG(INFO) << "Current mem: " << curr_mem << "MBs";
+
+    // Step 4: Check predecessors
     /*
-     * We always decrement the use count of the predecessor. Several cases for updating memory: 
-     * 1. If the predecessor is a parameter or shares storage with a parameter, don't free it. 
-     * 2. If the predecessor has expired (which means the op is an in-place op, otherwise something is wrong),
-     *    then its memory is used by some other tensor, don't free memory. 
-     * 3. Otherwise, add the predecessor to the free list if its use count drops to zero. 
+     * Notice that we only "free" views that are no longer used here. We free for another round at 
+     * step one (when processing the next op) to free the tensor that actually holds memory if all 
+     * of its views have reached the end of their life times. Non-view predecessors are also freed 
+     * over there.  
      */
+    // Potential optimization: hold a list of tensors to be freed so that we don't need to traverse
+    // the whole live set every time
     for (auto pred : node->operands()) {
       const torch_lazy_tensors::ir::Node* pred_node = pred.node;
       LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
@@ -411,19 +485,33 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
 
       // Check for in-place op if the parameter has expired
       if (pred_node_info.is_expired) {
-        LTC_CHECK(is_inplace) << "Op " << node->ToString() << ": operand " << pred_node->ToString()
-          << " has expired but the op is not an in-place op!";
+        LTC_CHECK(is_inplace || (is_alias && (pred_node == params.at(alias.at(outputs_map.at(node))))) ) 
+          << "Op " << node->ToString() << ": operand " << pred_node->ToString()
+          << " has expired! This is only allowed when (1) the op is an in-place op, or (2) the op's output"
+          << " aliases with this predecessor. ";
       }
 
-      // Don't touch parameter memory, don't update memory for expired tensors
-      if (!pred_node_info.is_param && !pred_node_info.is_expired && (pred_node_info.use_cnt == 0)) {
+      // Erase from the live tensor set if the predecessor is no longer useful. Memory consumption 
+      // is updated at step 1 of the next iteration
+      /*
+       * 1. Not parameter or alias with parameter
+       * 2. Have not been in-place updated
+       * 3. Has no use count
+       * 4. Is not currently viewed by some other tensor
+       */
+      if (!pred_node_info.is_param && !pred_node_info.is_expired && (pred_node_info.use_cnt == 0) && 
+          (pred_node_info.viewers.size() == 0)) {
         to_be_freed.push_back(std::make_pair(pred_node, pred_node_info.size_mbs));
+        if (pred_node_info.viewing) {
+          auto& viewing_node_info = live_tensors.at(pred_node_info.viewing);
+          viewing_node_info.viewers.erase(pred_node);
+          if ((!viewing_node_info.is_param) && (!viewing_node_info.is_expired) && 
+              (viewing_node_info.use_cnt == 0) && (viewing_node_info.viewers.size() == 0)) {
+            to_be_freed.push_back(std::make_pair(pred_node_info.viewing, viewing_node_info.size_mbs));
+          }
+        }
       }
     }
-
-    // Step 4: Maintain peak memory
-    peak_mem = (peak_mem > curr_mem) ? peak_mem : curr_mem;
-    LTC_LOG(INFO) << "Current mem: " << curr_mem << "MBs";
   }
   LTC_LOG(INFO) << "Peak memory: " << peak_mem << "MBs";
   return peak_mem;

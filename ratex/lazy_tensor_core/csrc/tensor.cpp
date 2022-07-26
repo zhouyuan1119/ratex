@@ -438,7 +438,6 @@ void LazyTensor::Async::Wait() {
 }
 
 LazyTensor LazyTensor::Create(const at::Tensor& tensor, const Device& device) {
-  LTC_LOG(INFO) << "Create 1";
   LTC_CHECK_NE(tensor.device().type(), at::kLazy);
   LazyTensor xtensor(tensor, device);
   DeviceContextArena::Get()->RegisterTensor(xtensor.data_ptr());
@@ -447,7 +446,6 @@ LazyTensor LazyTensor::Create(const at::Tensor& tensor, const Device& device) {
 
 LazyTensor LazyTensor::Create(lazy_tensors::ComputationClient::DataPtr handle,
                               c10::optional<at::ScalarType> logical_element_type) {
-  LTC_LOG(INFO) << "Create 2";
   LazyTensor xtensor(std::move(handle), logical_element_type);
   DeviceContextArena::Get()->RegisterTensor(xtensor.data_ptr());
   return xtensor;
@@ -455,7 +453,6 @@ LazyTensor LazyTensor::Create(lazy_tensors::ComputationClient::DataPtr handle,
 
 LazyTensor LazyTensor::Create(ir::Value ir_value, const Device& device,
                               c10::optional<at::ScalarType> logical_element_type) {
-  LTC_LOG(INFO) << "Create 3";
   LazyTensor xtensor(std::move(ir_value), device, logical_element_type);
   DeviceContextArena::Get()->RegisterTensor(xtensor.data_ptr());
   return xtensor;
@@ -463,7 +460,6 @@ LazyTensor LazyTensor::Create(ir::Value ir_value, const Device& device,
 
 LazyTensor LazyTensor::Create(std::shared_ptr<View> view, const Device& device,
                               c10::optional<at::ScalarType> logical_element_type) {
-  LTC_LOG(INFO) << "Create 4";
   LazyTensor xtensor(std::move(view), device, logical_element_type);
   DeviceContextArena::Get()->RegisterTensor(xtensor.data_ptr());
   return xtensor;
@@ -744,7 +740,6 @@ ir::Value LazyTensor::GetIrValueForScalar(const at::Scalar& value, lazy_tensors:
                                           const Device& device) {
   ir::Value ir_value = GetIrValueForScalar(value, type, device);
   if (!dimensions.empty()) {
-    LTC_LOG(INFO) << "GetIRValueForScalar";
     ir_value =
         ir::MakeNode<ir::ops::Expand>(ir_value, lazy_tensors::util::ToVector<int64_t>(dimensions));
   }
@@ -1176,7 +1171,6 @@ LazyTensor::PostOrderData LazyTensor::RunPostOrder(const std::vector<LazyTensor>
   std::vector<const ir::Node*> roots;
   roots.reserve(indices.size());
   for (auto index : indices) {
-    LTC_LOG(INFO) << "Root: " << index;
     ir::Value ir_value = tensors.at(index).CurrentIrValue();
     roots.push_back(ir_value.node.get());
   }

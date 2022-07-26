@@ -115,7 +115,6 @@ std::vector<ComputationClient::ComputationPtr> BaseComputationClient::Compile(
   std::vector<ComputationPtr> results;
   int idx = 0;
   for (const auto& ins : instances) {
-    LTC_LOG(INFO) << "Instance " << idx << ", cached_enabled = " << options_.cache_enabled;
     if (options_.cache_enabled) {
       static auto query = registry::GetPackedFunc("ratex.utils.cache.query");
       static auto create_entry = registry::GetPackedFunc("ratex.utils.cache.create_entry");
@@ -142,9 +141,8 @@ std::vector<ComputationClient::ComputationPtr> BaseComputationClient::Compile(
         release_lock(key);
       }
     } else {
-      LTC_LOG(INFO) << "Cache miss!";
       results.push_back(Compile(ins));
-      LTC_LOG(INFO) << "Compile done!";
+      // LTC_LOG(INFO) << "Compile done!";
     }
 
     std::string dump_alias_path = lazy_tensors::sys_util::GetEnvString("RATEX_DUMP_ALIAS", "");
@@ -152,6 +150,8 @@ std::vector<ComputationClient::ComputationPtr> BaseComputationClient::Compile(
       DumpComputationAlias(ins, dump_alias_path);
     }
   }
+  // Reset the node ID tracker so we start from zero for each new IR graph
+  torch_lazy_tensors::ir::Node::ResetID();
   return results;
 }
 

@@ -76,7 +76,7 @@ def random_torch_tensor(shape, dtype, range=None):
         raise NotImplementedError
 
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
-                             input_dtype, output_dtype, output_range=None):
+                             input_dtype, output_dtype, output_range=None, n_batches=2):
     """
     Get the peak memory consumption while training the model using an analysis
     pass on the lazy tensor IR. 
@@ -103,7 +103,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     # We run two batches because PyTorch memory consumption differs for the first two batches. 
     # We return the maximum of the two. 
     peak_mem_mbs = -float('inf')
-    for batch in range(2):
+    for batch in range(n_batches):
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype)
         inputs = inputs.to(device="lazy")
@@ -123,12 +123,13 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     return peak_mem_mbs
 
 def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
-                                 input_dtype, output_dtype, output_range):
+                                 input_dtype, output_dtype, output_range, n_batches=2):
     """Same with the function above, except that the peak memory is retrived from PyTorch CUDA utils."""
 
     import torch
     model = model.cuda()
-    for _ in range(2):
+    for i in range(n_batches):
+        torch.cuda.reset_max_memory_allocated()
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype)
         inputs = inputs.cuda()
@@ -140,6 +141,5 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         loss = loss_fn(outputs, labels)
         loss.backward()
         optimizer.step()
-        print(torch.cuda.max_memory_allocated() / (1024*1024))
-        print(torch.cuda.memory_summary())
+        print("Profiled peak memory for batch {}: {}".format(i, torch.cuda.max_memory_allocated() / (1024*1024)))
     return torch.cuda.max_memory_allocated()
