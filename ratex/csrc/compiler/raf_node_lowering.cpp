@@ -265,6 +265,9 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferMaxInDim(const ir::ops::MaxInDim* node);
   lazy_tensors::Shape InferArgMax(const ir::ops::ArgMax* node);
   lazy_tensors::Shape InferConvolutionOverrideable(const ir::ops::ConvolutionOverrideable* node);
+  lazy_tensors::Shape InferConvolutionBwdOverrideable(const ir::ops::ConvolutionBackwardOverrideable* node);
+  lazy_tensors::Shape InferAvgPool2d(const ir::ops::AvgPoolNd* node);
+  lazy_tensors::Shape InferAvgPool2dBwd(const ir::ops::AvgPoolNdBackward* node);
 };
 
 #undef DECLARE_OP2
@@ -1362,6 +1365,18 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
        return InferConvolutionOverrideable(
          ir::NodeCast<ir::ops::ConvolutionOverrideable>(node, ir::OpKind(at::aten::convolution_overrideable)));
     }
+    case at::aten::convolution_backward_overrideable: {
+       return InferConvolutionBwdOverrideable(
+         ir::NodeCast<ir::ops::ConvolutionBackwardOverrideable>(node, ir::OpKind(at::aten::convolution_backward_overrideable)));
+    }
+    case at::aten::avg_pool2d: {
+      return InferAvgPool2d(
+        ir::NodeCast<ir::ops::AvgPoolNd>(node, ir::OpKind(at::aten::avg_pool2d)));
+    }
+    case at::aten::avg_pool2d_backward: {
+      return InferAvgPool2dBwd(
+        ir::NodeCast<ir::ops::AvgPoolNdBackward>(node, ir::OpKind(at::aten::avg_pool2d_backward)));
+    }
     default: {
       if (kind == *ir::ops::ltc_generic_slice) {
         return InferGenericSlice(
@@ -1482,6 +1497,51 @@ lazy_tensors::Shape RAFNodeLowering::InferConvolutionOverrideable(const ir::ops:
    Var out = BuildConvolutionOverrideable(ops, node);
    Expr body = InferType(ExtractBinding(out, ops));
    return ToLTCShape(body->checked_type());
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferConvolutionBwdOverrideable(const ir::ops::ConvolutionBackwardOverrideable* node) {
+  auto input_shape = node->operands()[1].shape();
+  auto wgt_shape = node->operands()[2].shape();
+  return lazy_tensors::Shape({lazy_tensors::Shape(input_shape), lazy_tensors::Shape(wgt_shape)});
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferAvgPool2d(const ir::ops::AvgPoolNd* node) {
+  LTC_CHECK(node->spatial_dim_count() == 2) << "Only supporting AvgPool2d for now!";
+  // The shape below is computed according to pytorch documentation
+  auto input = node->operands()[0];
+  auto input_shape = input.shape();
+  int64_t ndims = input_shape.rank();
+  int64_t input_h = input_shape.dimensions(ndims - 2);
+  int64_t input_w = input_shape.dimensions(ndims - 1);
+  int64_t output_h = (input_h + 2 * node->padding()[0] - node->kernel_size()[0]) / node->stride()[0] + 1;
+  int64_t output_w = (input_w + 2 * node->padding()[1] - node->kernel_size()[1]) / node->stride()[1] + 1;
+  std::vector<int64_t> shape;
+  for (int i = 0; i < ndims - 2; i ++) {
+    shape.push_back(input_shape.dimensions(i));
+  }
+  shape.push_back(output_h);
+  shape.push_back(output_w);
+  return lazy_tensors::Shape(input_shape.element_type(), shape);
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferAvgPool2dBwd(const ir::ops::AvgPoolNdBackward* node) {
+  LTC_CHECK(node->spatial_dim_count() == 2) << "Only supporting AvgPool2d for now!";
+  // The shape below is computed according to pytorch documentation
+  // auto grad = node->operands()[0];
+  // auto grad_shape = grad.shape();
+  // int64_t ndims = grad_shape.rank();
+  // int64_t grad_h = grad_shape.dimensions(ndims - 2);
+  // int64_t grad_w = grad_shape.dimensions(ndims - 1);
+  // int64_t output_grad_h = (grad_h - 1) * node->stride()[0] + node->kernel_size()[0] - 2 * node->padding()[0];
+  // int64_t output_grad_w = (grad_w - 1) * node->stride()[1] + node->kernel_size()[1] - 2 * node->padding()[1];
+  // std::vector<int64_t> output_grad_dims;
+  // for (int i = 0; i < ndims - 2; i ++) {
+  //   output_grad_dims.push_back(grad_shape.dimensions(i));
+  // }
+  // output_grad_dims.push_back(output_grad_h);
+  // output_grad_dims.push_back(output_grad_w);
+  auto input_shape = node->operands()[1].shape();
+  return lazy_tensors::Shape(input_shape);
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferMm(const ir::Node* node) {
