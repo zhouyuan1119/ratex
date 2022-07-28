@@ -25,8 +25,9 @@ class GenericComputationMemModel : public lazy_tensors::GenericComputation {
     const std::vector<const ir::Node*>& nodes,
     const std::vector<const ir::Node*>& parameters,
     const std::vector<const ir::Node*>& outputs,
-    const std::unordered_map<int64_t, int64_t>& alias)
-  : nodes_(nodes), parameters_(parameters), outputs_(outputs), alias_(alias) {}
+    const std::unordered_map<int64_t, int64_t>& alias,
+    const std::unordered_map<const ir::Node*, int64_t>& param_alias)
+  : nodes_(nodes), parameters_(parameters), outputs_(outputs), alias_(alias), param_alias_(param_alias) {}
 
   /*! \brief Returns the type of the function, i.e. (param_0_ty, param_1_ty, ...) -> ret_ty */
   lazy_tensors::StatusOr<lazy_tensors::ProgramShape> GetProgramShape() const override;
@@ -36,6 +37,7 @@ class GenericComputationMemModel : public lazy_tensors::GenericComputation {
   const std::unordered_map<int64_t, int64_t> GetAlias() { return alias_; }
   const std::vector<const ir::Node*> GetOutputs() { return outputs_; }
   const std::vector<const ir::Node*> GetParameters() { return parameters_; };
+  const std::unordered_map<const ir::Node*, int64_t> GetParamAlias() { return param_alias_; }
 
  private:
   /*! \brief A list of nodes, sorted in topological order. */
@@ -44,8 +46,10 @@ class GenericComputationMemModel : public lazy_tensors::GenericComputation {
   std::vector<const ir::Node*> parameters_;
   /*! \brief A vector of outputs. We treat all live tensors as outputs. */
   std::vector<const ir::Node*> outputs_;
-  /*! \brief maps output to input if they are aliased */
+  /*! \brief Maps output to input if they are aliased */
   std::unordered_map<int64_t, int64_t> alias_;
+  /*! \brief Maps a parameter node to another parameter if they are aliased */
+  std::unordered_map<const ir::Node*, int64_t> param_alias_;
 };
 
 class MemModelLoweringContext : public ir::LoweringContext {
@@ -61,14 +65,24 @@ class MemModelLoweringContext : public ir::LoweringContext {
     // It is not used in the constructor of LoweringContext
     nodes_.insert(nodes_.end(), post_order.begin(), post_order.end());
     std::sort(nodes_.begin(), nodes_.end(), CompareNodes);
-    for (auto node : nodes_) {
+    std::unordered_map<lazy_tensors::client::Data::OpaqueHandle, size_t> data_handles;
+    for (int64_t i = 0; i < nodes_.size(); i ++) {
+      auto node = nodes_[i];
       // nodes_.push_back(node);
       // Collect all parameter nodes
       if (node->op() == *torch_lazy_tensors::ir::ops::ltc_device_data) {
         auto device_data_node = ir::NodeCast<ir::ops::DeviceData>(node, *ir::ops::ltc_device_data);
-        // Add the node into parameters
-        parameters_.push_back(device_data_node->data());
-        parameters_nodes_.push_back(node);
+        lazy_tensors::client::Data::OpaqueHandle handle = device_data_node->data()->GetOpaqueHandle();
+        auto it = data_handles.find(handle);
+        if (it == data_handles.end()) {
+          // Add the node into parameters
+          parameters_.push_back(device_data_node->data());
+          data_handles[handle] = parameters_nodes_.size();
+          parameters_nodes_.push_back(node);
+        } else {
+          auto aliased_param_id = data_handles.at(handle);
+          param_alias_.insert(std::make_pair(node, aliased_param_id));
+        }
       }
     }
   }
@@ -111,6 +125,8 @@ class MemModelLoweringContext : public ir::LoweringContext {
   std::vector<const ir::Node*> outputs_;
   /*! \brief maps output to input if they are aliased */
   std::unordered_map<int64_t, int64_t> alias_;
+  /*! \brief map to record parameter aliasing */
+  std::unordered_map<const ir::Node*, int64_t> param_alias_;
 };
 
 }  // namespace raf_backend

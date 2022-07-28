@@ -126,6 +126,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     outputs_map.insert(std::make_pair(outputs[i], i));
   }
   auto params = computation->GetParameters();
+  auto param_alias = computation->GetParamAlias();
   // LTC_LOG(INFO) << "Got info!";
 
   // Walk the graph and get the use count of each node. 
@@ -145,6 +146,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
                                          post_order_nodes,
                                          params,
                                          alias,
+                                         param_alias,
                                          use_cnts);
   peak_memory_ = peak_mem_mbs;
 
@@ -287,6 +289,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                         const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes,
                         const std::vector<const torch_lazy_tensors::ir::Node*>& params,
                         const std::unordered_map<int64_t, int64_t>& alias,
+                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& param_alias,
                         const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts) {
   struct TensorInfo {
     TensorInfo(double size, int64_t uses, bool param, const torch_lazy_tensors::ir::Node* orig_node) 
@@ -324,6 +327,15 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       live_tensors.insert(std::make_pair(param, TensorInfo(param_mem, use_cnts.at(param), true, nullptr)));
     }
   }
+  // Also add the aliased parameters, but here we don't increment memory
+  for (auto param_with_alias : param_alias) {
+    auto param = param_with_alias.first;
+    auto aliased_param_id = param_with_alias.second;
+    LTC_CHECK(live_tensors.count(param) == 0) << "Parameter " << param->ToString() 
+      << " is aliased with another parameter but it's already inserted into live tensors!";
+    auto& aliased_param_info = live_tensors.at(params.at(aliased_param_id));
+    live_tensors.insert(std::make_pair(param, TensorInfo(aliased_param_info.size_mbs, use_cnts.at(param), true, nullptr)));
+  }
 
   double peak_mem = curr_mem;
 
@@ -359,10 +371,10 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       LTC_CHECK(node_info.viewers.size() == 0) << "Node " << node_ptr->ToString() << " has " << node_info.viewers.size() << " viewers but is freed!";
       curr_mem -= (node_info.viewing) ? 0.0 : size_mbs;
       live_tensors.erase(node_ptr);
-      LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << size_mbs << " MBs memory";
+      LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << ((node_info.viewing) ? 0.0 : size_mbs) << " MBs memory";
     }
     to_be_freed.clear();
-
+    LTC_LOG(INFO) << "Here!";
     // Step 2: Add the output of the current op to the live set and update current memory
     double outp_size = CalculateMemFromShape(node->shape());
     LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
@@ -395,6 +407,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         LTC_CHECK(node->operands().size() == 1) << "In-place ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
         // Mark the entry of the input as expired
+        LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
         auto& pred_node_info = live_tensors.at(pred_node);
         pred_node_info.is_expired = true;
         LTC_CHECK(outp_size == pred_node_info.size_mbs) << "In-place update but tensor sizes mismatch: "
@@ -420,6 +433,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       } else if (IsViewChangingOp(node->op().op)) {
         LTC_CHECK(node->operands().size() == 1) << "View-changing ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
+        LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
         auto& pred_node_info = live_tensors.at(pred_node);
         // Put a new entry
         /*
@@ -440,6 +454,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           is_alias = true;
           // If there is I/O param aliasing, this is the output and mark the param as expired
           auto param_node = params.at(alias.at(outputs_map.at(node)));
+          LTC_CHECK(live_tensors.count(param_node)) << "Parameter " << param_node->ToString() << " is not live!";
           auto& param_node_info = live_tensors.at(param_node);
           param_node_info.is_expired = true;
           LTC_CHECK(outp_size == param_node_info.size_mbs) << "I/O aliasing but tensor sizes mismatch: "

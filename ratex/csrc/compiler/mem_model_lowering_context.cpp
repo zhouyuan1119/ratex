@@ -68,7 +68,7 @@ void MemModelLoweringContext::LowerNodeToResult(const ir::Node* node) {
 lazy_tensors::StatusOr<std::shared_ptr<lazy_tensors::GenericComputation>> 
 MemModelLoweringContext::Build() {
   std::shared_ptr<lazy_tensors::GenericComputation> computation(
-    std::make_shared<GenericComputationMemModel>(nodes_, parameters_nodes_, outputs_, alias_));
+    std::make_shared<GenericComputationMemModel>(nodes_, parameters_nodes_, outputs_, alias_, param_alias_));
   return computation;
 }
 
