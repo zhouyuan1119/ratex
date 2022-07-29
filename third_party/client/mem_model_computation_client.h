@@ -22,7 +22,8 @@ const std::unordered_set<std::string> pytorch_inplace_ops({
 /*! \brief A set of PyTorch ops that only change the view of tensor but don't update tensors. */
 const std::unordered_set<std::string> pytorch_view_changing_ops({
   "aten::permute",
-  "aten::expand"
+  "aten::expand",
+  "aten::view"
 });
 
 /*!
