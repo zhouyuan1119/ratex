@@ -19,7 +19,7 @@ def random_torch_tensor(shape, dtype, range=None):
         raise NotImplementedError
 
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
-                                 input_dtype, output_dtype, output_range=None, n_batches=2):
+                                 input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
     """
     Get the peak memory consumption while training the model using an analysis
     pass on the lazy tensor IR. Assuming that the model is in device "lazy". 
@@ -32,6 +32,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         output_shape: Tuple[int]  Output shape, including the batch dimension. Used to construct random labels. 
         input_dtype: Data type of the input. 
         output_dtype: Data type of the output. 
+        input_range: Range of input (for categorical features, like words). 
         output_range: Range of output (for classification labels). 
     
     Returns:
@@ -44,9 +45,9 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     peak_mem_mbs = -float('inf')
     for batch in range(n_batches):
         # Create dummy inputs
-        inputs = random_torch_tensor(input_shape, input_dtype)
+        inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.to(device="lazy")
-        inputs.requires_grad = True
+        # inputs.requires_grad = True
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.to(device="lazy")  # One-hot
         optimizer.zero_grad()
@@ -62,7 +63,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     return peak_mem_mbs
 
 def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
-                                 input_dtype, output_dtype, output_range, n_batches=2):
+                                 input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
     """Same with the function above, except that the peak memory is retrived from PyTorch CUDA utils."""
 
     for _, p in model.named_parameters():
@@ -71,9 +72,9 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     for i in range(n_batches):
         torch.cuda.reset_max_memory_allocated()
         # Create dummy inputs
-        inputs = random_torch_tensor(input_shape, input_dtype)
+        inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.cuda()
-        inputs.requires_grad = True
+        # inputs.requires_grad = True
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.cuda()  # One-hot
         optimizer.zero_grad()

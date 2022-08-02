@@ -194,6 +194,7 @@ class RAFNodeLowering : public NodeLowering {
   DECLARE_OP(Ne);
   DECLARE_OP(Eq);
   DECLARE_OP(Gt);
+  DECLARE_OP(Lt);
   DECLARE_OP(Ceil);
   DECLARE_OP(Abs);
   DECLARE_OP(Pow);
@@ -240,6 +241,7 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferNe(const ir::Node* node);
   lazy_tensors::Shape InferEq(const ir::Node* node);
   lazy_tensors::Shape InferGt(const ir::Node* node);
+  lazy_tensors::Shape InferLt(const ir::Node* node);
   lazy_tensors::Shape InferPow(const ir::Node* node);
   lazy_tensors::Shape InferMm(const ir::Node* node);
   lazy_tensors::Shape InferAddMatMul(const ir::Node* node);
@@ -268,6 +270,11 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferConvolutionBwdOverrideable(const ir::ops::ConvolutionBackwardOverrideable* node);
   lazy_tensors::Shape InferAvgPool2d(const ir::ops::AvgPoolNd* node);
   lazy_tensors::Shape InferAvgPool2dBwd(const ir::ops::AvgPoolNdBackward* node);
+  lazy_tensors::Shape InferIndexSelect(const ir::ops::IndexSelect* node);
+  lazy_tensors::Shape InferNativeBatchNorm(const ir::ops::NativeBatchNormForward* node);
+  lazy_tensors::Shape InferNativeBatchNormBwd(const ir::ops::NativeBatchNormBackward* node);
+  lazy_tensors::Shape InferMatMul(const ir::Node* node);
+  lazy_tensors::Shape InferUpdateSlice(const ir::ops::UpdateSlice* node);
 };
 
 #undef DECLARE_OP2
@@ -984,6 +991,7 @@ DEFINE_UNARY_OP(ReciprocalOp, reciprocal);
 DEFINE_COMPARISON_OP(Ne, not_equal)
 DEFINE_COMPARISON_OP(Eq, equal)
 DEFINE_COMPARISON_OP(Gt, greater)
+DEFINE_COMPARISON_OP(Lt, less)
 
 #undef DEFINE_COMPARISON_OP
 #undef DEFINE_UNARY_OP
@@ -1306,6 +1314,9 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
     case at::aten::eq: {
       return InferEq(node);
     }
+    case at::aten::lt: {
+      return InferLt(node);
+    }
     case at::aten::gt: {
       return InferGt(node);
     }
@@ -1377,6 +1388,21 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
       return InferAvgPool2dBwd(
         ir::NodeCast<ir::ops::AvgPoolNdBackward>(node, ir::OpKind(at::aten::avg_pool2d_backward)));
     }
+    case at::aten::index_select: {
+      return InferIndexSelect(
+        ir::NodeCast<ir::ops::IndexSelect>(node, ir::OpKind(at::aten::index_select)));
+    }
+    case at::aten::native_batch_norm: {
+      return InferNativeBatchNorm(
+        ir::NodeCast<ir::ops::NativeBatchNormForward>(node, ir::OpKind(at::aten::native_batch_norm)));
+    }
+    case at::aten::native_batch_norm_backward: {
+      return InferNativeBatchNormBwd(
+        ir::NodeCast<ir::ops::NativeBatchNormBackward>(node, ir::OpKind(at::aten::native_batch_norm_backward)));
+    }
+    case at::aten::matmul: {
+      return InferMatMul(node);
+    }
     default: {
       if (kind == *ir::ops::ltc_generic_slice) {
         return InferGenericSlice(
@@ -1400,7 +1426,11 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
         return InferReduceScatter(
             ir::NodeCast<ir::ops::ReduceScatter>(node, *ir::ops::ltc_reduce_scatter));
       }
-      LTC_LOG(FATAL) << "Shape inference not supported for operator: " << kind;
+      if (kind == *ir::ops::ltc_update_slice) {
+        return InferUpdateSlice(
+            ir::NodeCast<ir::ops::UpdateSlice>(node, *ir::ops::ltc_update_slice));
+      }
+      LTC_LOG(FATAL) << "Shape inference not supported for operator: " << kind << " " << node->ToString();
     }
   }
 }
@@ -1500,15 +1530,15 @@ lazy_tensors::Shape RAFNodeLowering::InferConvolutionOverrideable(const ir::ops:
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferConvolutionBwdOverrideable(const ir::ops::ConvolutionBackwardOverrideable* node) {
-  auto input_shape = node->operands()[1].shape();
-  auto wgt_shape = node->operands()[2].shape();
+  auto input_shape = node->operand(1).shape();
+  auto wgt_shape = node->operand(2).shape();
   return lazy_tensors::Shape({lazy_tensors::Shape(input_shape), lazy_tensors::Shape(wgt_shape)});
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferAvgPool2d(const ir::ops::AvgPoolNd* node) {
   LTC_CHECK(node->spatial_dim_count() == 2) << "Only supporting AvgPool2d for now!";
   // The shape below is computed according to pytorch documentation
-  auto input = node->operands()[0];
+  auto input = node->operand(0);
   auto input_shape = input.shape();
   int64_t ndims = input_shape.rank();
   int64_t input_h = input_shape.dimensions(ndims - 2);
@@ -1540,8 +1570,97 @@ lazy_tensors::Shape RAFNodeLowering::InferAvgPool2dBwd(const ir::ops::AvgPoolNdB
   // }
   // output_grad_dims.push_back(output_grad_h);
   // output_grad_dims.push_back(output_grad_w);
-  auto input_shape = node->operands()[1].shape();
+  auto input_shape = node->operand(1).shape();
   return lazy_tensors::Shape(input_shape);
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferIndexSelect(const ir::ops::IndexSelect* node) {
+  int64_t dim = node->dim();
+  auto input_shape = node->operand(0).shape();
+  auto index_shape = node->operand(1).shape();
+  std::vector<int64_t> output_dims;
+  for (int i = 0; i < input_shape.rank(); i ++) {
+    if (i == dim) {
+      output_dims.push_back(index_shape.dimensions(0));
+    } else {
+      output_dims.push_back(input_shape.dimensions(i));
+    }
+  }
+  return lazy_tensors::Shape(input_shape.element_type(), output_dims);
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferNativeBatchNorm(const ir::ops::NativeBatchNormForward* node) {
+  return lazy_tensors::Shape({
+    node->operand(0).shape(),
+    node->operand(3).shape(),
+    node->operand(4).shape(),
+    node->operand(4).shape() // "Variance invert"
+  });
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferNativeBatchNormBwd(const ir::ops::NativeBatchNormBackward* node) {
+  return lazy_tensors::Shape({
+    node->operand(1).shape(),
+    node->operand(2).shape(),
+    node->operand(2).shape()
+  });
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferMatMul(const ir::Node* node) {
+  auto in0_shape = node->operand(0).shape();
+  auto in1_shape = node->operand(1).shape();
+  int64_t in0_rank = in0_shape.rank();
+  int64_t in1_rank = in1_shape.rank();
+  if ((in0_rank == 1) && (in1_rank == 1)) {
+    // Both tensors are 1-dimensional, return type is scalar
+    return lazy_tensors::Shape(in0_shape.element_type(), {});
+  } else if ((in0_rank == 2) && (in1_rank == 2)) {
+    // Both tensors are 2-dimensional, do a normal matmul
+    return lazy_tensors::Shape(in0_shape.element_type(), {in0_shape.dimensions(0), in1_shape.dimensions(1)});
+  } else if ((in0_rank == 1) && (in1_rank == 2)) {
+    // If the first tensor is 1D and the second one is 2D, a 1 is prepended to the shape of the first
+    // tensor for a matmul, after the matmul this dimension is removed
+    return lazy_tensors::Shape(in0_shape.element_type(), {in1_shape.dimensions(1)});
+  } else if ((in0_rank == 2) && (in1_rank == 1)) {
+    // First tensor is 2D and second tensor is 1D, do a matrix-vector product
+    return lazy_tensors::Shape(in0_shape.element_type(), {in0_shape.dimensions(0)});
+  } else if ((in0_rank >= 1) && (in1_rank >= 1) && ((in0_rank > 2) || (in1_rank > 2))) {
+    // If both tensors are at least 1D and at least one tensor is more than 2D, do a batched matmul
+    // Matmul is performed on the last two dimensions, ones are prepended to tensor dimensions for 
+    // this purpose if an argument is 1D. Other dimensions are broadcasted and they must be broadcastable. 
+    std::vector<int64_t> in0_prepended_dims;
+    std::vector<int64_t> in1_prepended_dims;
+    if (in0_rank > in1_rank) {
+      for (int i = 0; i < in0_rank - in1_rank; i ++)
+        in1_prepended_dims.push_back(1);
+    } else {
+      for (int i = 0; i < in1_rank - in0_rank; i ++)
+        in0_prepended_dims.push_back(1);
+    }
+    for (int i = 0; i < in0_rank; i ++)
+      in0_prepended_dims.push_back(in0_shape.dimensions(i));
+    for (int i = 0; i < in1_rank; i ++)
+      in1_prepended_dims.push_back(in1_shape.dimensions(i));
+    std::vector<int64_t> result_dims;
+    for (int i = 0; i < in0_prepended_dims.size() - 2; i ++) {
+      LTC_CHECK((in0_prepended_dims[i] % in1_prepended_dims[i] == 0) || 
+                (in1_prepended_dims[i] % in0_prepended_dims[i] == 0))
+        << "InferMatMul: Dimension " << i << " is not broadcastable: " 
+        << in0_prepended_dims[i] << " vs. " << in1_prepended_dims[i];
+      result_dims.push_back(std::max(in0_prepended_dims[i], in1_prepended_dims[i]));
+    }
+    result_dims.push_back(in0_prepended_dims[in0_prepended_dims.size()-2]);
+    result_dims.push_back(in1_prepended_dims[in1_prepended_dims.size()-1]);
+    auto res = lazy_tensors::Shape(in0_shape.element_type(), result_dims);
+    return res;
+  }
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferUpdateSlice(const ir::ops::UpdateSlice* node) {
+  // This op updates a slice of the input with the provided new values. 
+  // Directly return the shape of the input. 
+  auto input = node->operand(0);
+  return lazy_tensors::Shape(input.shape());
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferMm(const ir::Node* node) {
@@ -1682,6 +1801,7 @@ lazy_tensors::Shape RAFNodeLowering::InferLogicalOr(const ir::Node* node) {
 DEFINE_INFER_COMPARISON_OP(Ne)
 DEFINE_INFER_COMPARISON_OP(Eq)
 DEFINE_INFER_COMPARISON_OP(Gt)
+DEFINE_INFER_COMPARISON_OP(Lt)
 
 #undef DEFINE_INFER_COMPARISON_OP
 

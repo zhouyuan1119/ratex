@@ -1184,12 +1184,10 @@ LazyTensor::PostOrderData LazyTensor::RunPostOrder(const std::vector<LazyTensor>
       auto it = data_handles.find(handle);
       if (it != data_handles.end()) {
         po_data.parameter_sequence.push_back(it->second);
-        LTC_LOG(INFO) << "Found parameters data: " << device_data->ToString();
       } else {
         po_data.parameter_sequence.push_back(po_data.parameters_data.size());
         data_handles[handle] = po_data.parameters_data.size();
         po_data.parameters_data.push_back(device_data->data());
-        LTC_LOG(INFO) << "Insert parameters data " << data_handles[handle] << ": " << device_data->ToString();
       }
     }
   }
@@ -1442,7 +1440,6 @@ LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>&
                                                   const SyncTensorCollection& coll,
                                                   PostOrderData* po_data) {
   const bool enable_aliasing = lazy_tensors::sys_util::GetEnvBool("ENABLE_PARAM_ALIASING", false);
-  LTC_LOG(INFO) << "po_data->parameters_data.size() = " << po_data->parameters_data.size();
   auto lowering_ctx = ir::LoweringContext::Create(
       "SyncTensorsGraph", coll.device, po_data->post_order, std::move(po_data->emission_map));
   for (auto index : coll.indices) {

@@ -1035,7 +1035,6 @@ LazyTensor LazyTensor::exp(const LazyTensor& input) {
 }
 
 LazyTensor LazyTensor::expand(const LazyTensor& input, std::vector<int64_t> size) {
-  LTC_LOG(INFO) << "Creating expand... ";
   auto input_shape = input.shape();
   return input.CreateFrom(ir::MakeNode<ir::ops::Expand>(
       input.GetIrValue(), GetExpandDimensions(input_shape.get(), std::move(size))));

@@ -121,12 +121,26 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
   auto post_order_nodes = computation->GetPostOrderNodes();
   auto alias = computation->GetAlias();
   auto outputs = computation->GetOutputs();
+  LTC_LOG(INFO) << "Outputs: ";
   std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> outputs_map;
   for (int64_t i = 0; i < outputs.size(); i ++) {
     outputs_map.insert(std::make_pair(outputs[i], i));
+    LTC_LOG(INFO) << "|-" << outputs[i]->ToString();
   }
   auto params = computation->GetParameters();
   auto param_alias = computation->GetParamAlias();
+  LTC_LOG(INFO) << "I/O tensor alias:";
+  for (auto p : alias) {
+    auto outp_idx = p.first;
+    auto param_idx = p.second;
+    LTC_LOG(INFO) << "|-Output " << outputs[outp_idx]->ToString() << " <-> " << " param " << params[param_idx]->ToString();
+  }
+  LTC_LOG(INFO) << "Param alias: ";
+  for (auto p : param_alias) {
+    auto node = p.first;
+    auto second_idx = p.second;
+    LTC_LOG(INFO) << "|-Param " << node->ToString() << " <->  param " << params[second_idx]->ToString();
+  }
   // LTC_LOG(INFO) << "Got info!";
 
   // Walk the graph and get the use count of each node. 
@@ -192,6 +206,7 @@ std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> AnalyzeUseCount
 int GetElementSizeInBytes(const PrimitiveType elem_ty) {
   int element_size = 0;
   switch (elem_ty) {
+    case PrimitiveType::PRED:
     case PrimitiveType::S8:
     case PrimitiveType::U8: element_size = 1; break;
     case PrimitiveType::S16:
@@ -321,12 +336,12 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     // Only include parameters that are used in the graph to avoid counting parameters from the previous batch
     if (use_cnts.count(param) && (use_cnts.at(param) > 0)) {
       double param_mem = CalculateMemFromShape(Shape(param->shape()));
-      LTC_LOG(INFO) << "Param: " << param_mem << " MBs";
       curr_mem += param_mem;
       // Insert parameters into the live set, they are never removed
       live_tensors.insert(std::make_pair(param, TensorInfo(param_mem, use_cnts.at(param), true, nullptr)));
     }
   }
+  LTC_LOG(INFO) << "Param total: " << curr_mem << " MBs";
   // Also add the aliased parameters, but here we don't increment memory
   for (auto param_with_alias : param_alias) {
     auto param = param_with_alias.first;
@@ -341,7 +356,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
 
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
-    LTC_LOG(INFO) << "Analyzing node " << node->ToString() << ", uses: " << node->uses().size();
+    LTC_LOG(INFO) << "|" << node->ToString() << ", uses: " << node->uses().size();
 
     // Step 1: Purge any tensors that can be freed
     /* 
@@ -371,10 +386,9 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       LTC_CHECK(node_info.viewers.size() == 0) << "Node " << node_ptr->ToString() << " has " << node_info.viewers.size() << " viewers but is freed!";
       curr_mem -= (node_info.viewing) ? 0.0 : size_mbs;
       live_tensors.erase(node_ptr);
-      LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << ((node_info.viewing) ? 0.0 : size_mbs) << " MBs memory";
+      LTC_LOG(INFO) << "|-Erase " << node_ptr->ToString() << " for " << ((node_info.viewing) ? 0.0 : size_mbs) << " MBs memory";
     }
     to_be_freed.clear();
-    LTC_LOG(INFO) << "Here!";
     // Step 2: Add the output of the current op to the live set and update current memory
     double outp_size = CalculateMemFromShape(node->shape());
     LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
@@ -403,6 +417,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     if (node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) {
       // In-place op
       if (IsInplaceOp(node->op().op)) {
+        LTC_LOG(INFO) << "|-Inplace op";
         is_inplace = true;
         LTC_CHECK(node->operands().size() == 1) << "In-place ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
@@ -431,6 +446,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           live_tensors.at(pred_node_info.viewing).viewers.insert(node);
         }
       } else if (IsViewChangingOp(node->op().op)) {
+        LTC_LOG(INFO) << "|-View-changing op";
         LTC_CHECK(node->operands().size() == 1) << "View-changing ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
         LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
@@ -454,6 +470,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           is_alias = true;
           // If there is I/O param aliasing, this is the output and mark the param as expired
           auto param_node = params.at(alias.at(outputs_map.at(node)));
+          LTC_LOG(INFO) << "|-Aliases with param " << param_node->ToString();
           LTC_CHECK(live_tensors.count(param_node)) << "Parameter " << param_node->ToString() << " is not live!";
           auto& param_node_info = live_tensors.at(param_node);
           param_node_info.is_expired = true;
@@ -479,7 +496,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     // Step 3: Maintain peak memory. The output size of this op has been added, and all tensors that
     // are no longer useful before this op have been freed at this point. 
     peak_mem = (peak_mem > curr_mem) ? peak_mem : curr_mem;
-    LTC_LOG(INFO) << "Current mem: " << curr_mem << "MBs";
+    LTC_LOG(INFO) << "|-Current mem: " << curr_mem << "MBs";
 
     // Step 4: Check predecessors
     /*
