@@ -51,11 +51,11 @@ def main():
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()
     peak_memory_mbs = analyze_training_peak_memory(
-        model_lt, optimizer_lt, loss_fn, (4, 1, 28, 28), (4,), torch.float32, torch.int64, [0, 10])
+        model_lt, optimizer_lt, loss_fn, (4, 1, 28, 28), (4,), torch.float32, torch.int64, output_range=[0, 10])
     model_cuda = model_cuda.cuda()
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_bs = profile_training_peak_memory(
-        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 1, 28, 28), (4,), torch.float32, torch.int64, [0, 10])
+        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 1, 28, 28), (4,), torch.float32, torch.int64, output_range=[0, 10])
 
 if __name__ == "__main__":
     main()

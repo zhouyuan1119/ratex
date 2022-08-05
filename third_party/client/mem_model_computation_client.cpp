@@ -357,7 +357,6 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
     LTC_LOG(INFO) << "|" << node->ToString() << ", uses: " << node->uses().size();
-
     // Step 1: Purge any tensors that can be freed
     /* 
      * A live tensor can be safely freed if:

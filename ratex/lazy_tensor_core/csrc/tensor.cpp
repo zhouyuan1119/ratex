@@ -619,6 +619,16 @@ void LazyTensor::SetIrValue(ir::Value ir_value, bool inplace) {
     // If we have an active view, SetIrValue() happens, and we are
     // within an in-place execution context, we need to update the view's
     // alias as well.
+    auto curr_irvalue = CurrentIrValue();
+    if (curr_irvalue) {
+      LTC_LOG(INFO) << "Current node: " << curr_irvalue.node->ToString();
+      LTC_LOG(INFO) << "Old view: " << data()->view->GetViewIrNode().ir_value.node->ToString();
+      LTC_LOG(INFO) << "Update view to: " << ir_value.node->ToString();
+    } else {
+      LTC_LOG(INFO) << "Current node is nullptr";
+      LTC_LOG(INFO) << "Old view: " << data()->view->GetViewIrNode().ir_value.node->ToString();
+      LTC_LOG(INFO) << "Update view to: " << ir_value.node->ToString();
+    }
     data()->view = UpdateView(data()->view, std::move(ir_value));
     data()->generation += 1;
   } else {
@@ -1498,47 +1508,6 @@ LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>&
           /*computation=*/std::move(computations.front()),
           /*parameters_data=*/std::move(po_data->parameters_data)};
 }
-
-// LazyTensor::CompilationResult LazyTensor::Compile(const std::vector<LazyTensor>& tensors,
-//                                                   lazy_tensors::Span<const std::string> devices,
-//                                                   const SyncTensorCollection& coll,
-//                                                   PostOrderData* po_data) {
-// 
-//   const bool enable_aliasing = lazy_tensors::sys_util::GetEnvBool("ENABLE_PARAM_ALIASING", false);
-//   LTC_LOG(INFO) << "Enable aliasing: " << enable_aliasing;
-//   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
-//               << " on device " << coll.device << " ...";
-//   
-//   // Directly create the computation, we don't need any lowering because we directly process lazy tensor IR
-//   std::shared_ptr<lazy_tensors::GenericComputation> computation(
-//     std::make_shared<compiler::mem_model_lowering_backend::GenericComputationMemModel>(
-//       tensors, po_data->post_order, po_data->parameters_data));
-//   // Compute program shape so we can feed into Compile()
-//   lazy_tensors::ProgramShape program_shape = ConsumeValue(computation->GetProgramShape());
-//   LTC_CHECK_EQ(program_shape.parameters_size(), po_data->parameters_data.size());
-//   lazy_tensors::Shape shape =
-//       MakeShapeWithDeviceLayout(program_shape.result(), coll.device.hw_type);
-//   std::vector<lazy_tensors::ComputationClient::CompileInstance> instances;
-//   instances.push_back(
-//     lazy_tensors::ComputationClient::CompileInstance(
-//       std::move(computation), 
-//       coll.device.ToString(),
-//       lazy_tensors::ComputationClient::Get()->GetCompilationDevices(coll.device.ToString(), devices),
-//       &shape)
-//   );
-//   LTC_VLOG(3) << "Created compile instance!";
-// 
-//   // Actually compile the program, in our case we will compute peak memory
-//   std::vector<std::shared_ptr<lazy_tensors::ComputationClient::Computation>> computations =
-//       lazy_tensors::ComputationClient::Get()->Compile(std::move(instances));
-//   LTC_VLOG(3) << "Compiling IR graph hash " << lazy_tensors::util::HexHash(coll.hash)
-//               << " on device " << coll.device << " done!";
-// 
-//   return {/*device=*/coll.device,
-//           /*emitted_nodes=*/po_data->emission_map.size(),
-//           /*computation=*/std::move(computations.front()),
-//           /*parameters_data=*/std::move(po_data->parameters_data)};
-// }
 
 std::shared_ptr<LazyTensor::Async> LazyTensor::SyncTensorsGraphInternal(
     std::vector<LazyTensor>* tensors, lazy_tensors::Span<const std::string> devices,
