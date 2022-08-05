@@ -447,6 +447,12 @@ class LazyTensor {
   // matrix dimensions are specified by dim1 and dim2, the diagonal by offset.
   static LazyTensor diagonal(const LazyTensor& input, int64_t offset, int64_t dim1, int64_t dim2);
 
+  static std::tuple<LazyTensor, LazyTensor, LazyTensor> dropout(const LazyTensor& input, double p,
+                                                                c10::optional<bool> train);
+
+  static LazyTensor dropout_backward(const LazyTensor& dy, const LazyTensor& mask,
+                                     const LazyTensor& reserve_space);
+
   static LazyTensor div(const LazyTensor& input, const LazyTensor& other,
                         const c10::optional<c10::string_view>& = c10::nullopt,
                         c10::optional<at::ScalarType> logical_element_type = c10::nullopt);
@@ -462,6 +468,9 @@ class LazyTensor {
   static LazyTensor elu_backward(const LazyTensor& grad_output, const at::Scalar& alpha,
                                  const at::Scalar& scale, const at::Scalar& input_scale,
                                  const LazyTensor& output);
+
+  static LazyTensor embedding(const LazyTensor& weight, const LazyTensor& indices,
+                              int64_t padding_idx, bool scale_grad_by_freq, bool sparse);
 
   static LazyTensor embedding_dense_backward(const LazyTensor& grad_output,
                                              const LazyTensor& indices, int64_t num_weights,

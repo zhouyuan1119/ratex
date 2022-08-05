@@ -440,6 +440,7 @@ at::Tensor LazyNativeFunctions::where(const at::Tensor& condition, const at::Ten
 at::Tensor LazyNativeFunctions::_softmax(const at::Tensor& self, int64_t dim,
                                          bool /* half_to_float */) {
   LTC_FN_COUNTER("raf::");
+  LTC_CHECK_EQ(dim, self.dim() - 1);
   return bridge::AtenFromLtcTensor(
       LazyTensor::softmax(bridge::raf_backend::GetLtcTensor(self), dim, c10::nullopt));
 }
@@ -1066,6 +1067,10 @@ at::Tensor LazyNativeFunctions::dot(const at::Tensor& self, const at::Tensor& te
                                                       bridge::raf_backend::GetLtcTensor(tensor)));
 }
 
+at::Tensor LazyNativeFunctions::dropout(const at::Tensor& input, double p, bool train) {
+  return aten_autograd_ops::Dropout::apply(input, p, train);
+}
+
 at::Tensor LazyNativeFunctions::elu(const at::Tensor& self, const at::Scalar& alpha,
                                     const at::Scalar& scale, const at::Scalar& input_scale) {
   LTC_FN_COUNTER("raf::");
@@ -1089,8 +1094,23 @@ at::Tensor LazyNativeFunctions::embedding(const at::Tensor& weight, const at::Te
                                           int64_t padding_idx, bool scale_grad_by_freq,
                                           bool sparse) {
   LTC_FN_COUNTER("raf::");
-  // We route embedding to native so that it will be decomposed to supported Lazy operations.
-  return at::native::embedding(weight, indices, padding_idx, scale_grad_by_freq, sparse);
+  if (scale_grad_by_freq || sparse || padding_idx != -1) {
+    RATEX_VLOG(3) << "Unsupported parameters - Falling back to CPU (currently sparse, "
+                     "scale_grad_by_freq, and padding are not support)";
+    return FALLBACK_ATEN_OP(embedding, weight, indices, padding_idx, scale_grad_by_freq, sparse);
+  }
+  LazyTensor weight_tensor;
+  LazyTensor indices_tensor;
+  auto weight_xtensor = bridge::raf_backend::TryGetLtcTensor(weight);
+  if (!weight_xtensor) {
+    indices_tensor = bridge::raf_backend::GetLtcTensor(indices);
+    weight_tensor = bridge::GetOrCreateLtcTensor(weight, indices_tensor.GetDevice());
+  } else {
+    weight_tensor = *weight_xtensor;
+    indices_tensor = bridge::GetOrCreateLtcTensor(indices, weight_tensor.GetDevice());
+  }
+  return bridge::AtenFromLtcTensor(LazyTensor::embedding(weight_tensor, indices_tensor, padding_idx,
+                                                         scale_grad_by_freq, sparse));
 }
 
 at::Tensor LazyNativeFunctions::embedding_dense_backward(const at::Tensor& grad_output,

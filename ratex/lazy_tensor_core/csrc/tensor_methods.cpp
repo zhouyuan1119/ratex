@@ -49,8 +49,11 @@
 #include "lazy_tensor_core/csrc/ops/device_data.h"
 #include "lazy_tensor_core/csrc/ops/diagonal.h"
 #include "lazy_tensor_core/csrc/ops/discrete_uniform.h"
+#include "lazy_tensor_core/csrc/ops/dropout.h"
+#include "ratex/csrc/ops/dropout_backward.h"
 #include "lazy_tensor_core/csrc/ops/expand.h"
 #include "lazy_tensor_core/csrc/ops/exponential.h"
+#include "lazy_tensor_core/csrc/ops/embedding.h"
 #include "lazy_tensor_core/csrc/ops/flip.h"
 #include "lazy_tensor_core/csrc/ops/gather.h"
 #include "lazy_tensor_core/csrc/ops/generic.h"
@@ -991,6 +994,22 @@ LazyTensor LazyTensor::div(const LazyTensor& input, const at::Scalar& other) {
   return input.CreateFrom(input_value / other_value, scalar_type);
 }
 
+std::tuple<LazyTensor, LazyTensor, LazyTensor> LazyTensor::dropout(const LazyTensor& input,
+                                                                   double p,
+                                                                   c10::optional<bool> train) {
+  ir::NodePtr node = ir::MakeNode<ir::ops::Dropout>(input.GetIrValue(), p);
+  auto output = input.CreateFrom(ir::Value(node, 0));
+  auto mask = input.CreateFrom(ir::Value(node, 1));
+  auto reserve_space = input.CreateFrom(ir::Value(node, 2));
+  return std::make_tuple(std::move(output), std::move(mask), std::move(reserve_space));
+}
+
+LazyTensor LazyTensor::dropout_backward(const LazyTensor& dy, const LazyTensor& mask,
+                                        const LazyTensor& reserve_space) {
+  return dy.CreateFrom(ir::MakeNode<ir::ops::DropoutBackward>(dy.GetIrValue(), mask.GetIrValue(),
+                                                              reserve_space.GetIrValue()));
+}
+
 LazyTensor LazyTensor::eq(const LazyTensor& input, const at::Scalar& other) {
   return DispatchComparisonOp(at::aten::eq, input, other);
 }
@@ -1009,6 +1028,12 @@ LazyTensor LazyTensor::elu_backward(const LazyTensor& grad_output, const at::Sca
                                     const LazyTensor& output) {
   return grad_output.CreateFrom(ir::ops::EluBackward(grad_output.GetIrValue(), output.GetIrValue(),
                                                      alpha, scale, input_scale));
+}
+
+LazyTensor LazyTensor::embedding(const LazyTensor& weight, const LazyTensor& indices,
+                                 int64_t padding_idx, bool scale_grad_by_freq, bool sparse) {
+  return weight.CreateFrom(
+      ir::MakeNode<ir::ops::Embedding>(weight.GetIrValue(), indices.GetIrValue()));
 }
 
 LazyTensor LazyTensor::embedding_dense_backward(const LazyTensor& grad_output,

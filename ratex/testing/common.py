@@ -220,6 +220,7 @@ def with_mock_distributed_info(world_size, rank, zero_opt_level=0, enable_data_p
     def test_helper(orig_test):
         @functools.wraps(orig_test)
         def wrapper(*args, **kwargs):
+            dist.set_default_communicator("void")
             dcfg = dist.get_config()
             comm = dist.get_communicator()
             old_dcfg = dcfg.dumps()
@@ -287,12 +288,12 @@ def train(
         dataset, batch_size=batch_size, shuffle=False, num_workers=0
     )
     dataset_size = len(dataset)
-    model = model.to(device, dtype=dtype)
     model.train()
 
-    optimizer = optimizer(model.parameters(), **optimizer_params)
     if "lazy" in device:
         model = ratex.jit.script(model)
+    model = model.to(device, dtype=dtype)
+    optimizer = optimizer(model.parameters(), **optimizer_params)
 
     for epoch in range(num_epochs):
         logger.debug("Epoch %2d starts...", epoch)
@@ -341,7 +342,7 @@ def verify(lazy_results, cpu_results, tol=1e-5):
         torch.testing.assert_close(lazy, cpu, atol=tol, rtol=tol)
 
 
-def run_step(device, model_origin, args, jit_script=True):
+def run_step(device, model_origin, args, jit_script=True, with_backward=False):
     """
     Run the model once.
 
@@ -361,24 +362,49 @@ def run_step(device, model_origin, args, jit_script=True):
         and AutoDiff. This is used to evaluate lowering the ops without backward.
     """
     model = copy.deepcopy(model_origin)
-    model = model.to(device, dtype=torch.float32)
     if device == "lazy" and jit_script:
         model = ratex.jit.script(model)
+    model = model.to(device, dtype=torch.float32)
     args = [arg.to(device) for arg in args]
     out = model(*args)
+
+    if with_backward:
+        loss = out.sum()
+        loss.backward()
+
     lm.mark_step()
     if isinstance(out, tuple):
         out = [o.to("cpu") for o in out]
     else:
         out = out.to("cpu")
+
+    if with_backward:
+        grads = [a.grad.to("cpu") for a in args]
+        return (out, grads)
+
     return out
 
 
-def verify_step(model, args, jit_script=True, tol=1e-5):
+def verify_step(model, args, jit_script=True, with_backward=False, tol=1e-5):
     """Verify the results between CPU and Lazy"""
-    torch.testing.assert_close(
-        run_step("cpu", model, args), run_step("lazy", model, args, jit_script), rtol=tol, atol=tol
-    )
+    if with_backward:
+        args_ratex = []
+        args_cpu = args
+        for x in args:
+            n_x = np.copy(x.data)
+            t_x_ratex = torch.tensor(n_x, device="lazy", dtype=torch.float32, requires_grad=True)
+            args_ratex.append(t_x_ratex)
+        out_cpu, grad_cpu = run_step("cpu", model, args_cpu, with_backward=with_backward)
+        out_lazy, grad_lazy = run_step("lazy", model, args_ratex, jit_script, with_backward)
+        torch.testing.assert_close(grad_cpu, grad_lazy, rtol=tol, atol=tol)
+        torch.testing.assert_close(out_cpu, out_lazy, rtol=tol, atol=tol)
+    else:
+        torch.testing.assert_close(
+            run_step("cpu", model, args, with_backward=with_backward),
+            run_step("lazy", model, args, jit_script=jit_script, with_backward=with_backward),
+            rtol=tol,
+            atol=tol,
+        )
 
 
 def compile_model(model_origin, args, jit_script=True):
