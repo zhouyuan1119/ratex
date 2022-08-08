@@ -120,6 +120,7 @@
 #include "lazy_tensor_core/csrc/ops/var.h"
 #include "lazy_tensor_core/csrc/ops/view.h"
 #include "lazy_tensor_core/csrc/ops/embedding.h"
+#include "lazy_tensor_core/csrc/ops/embedding_dense_backward.h"
 #include "lazy_tensor_core/csrc/tensor_util.h"
 #include "lazy_tensor_core/csrc/helpers.h"
 #include "lazy_tensors/shape_util.h"
@@ -244,6 +245,7 @@ class RAFNodeLowering : public NodeLowering {
   DECLARE_OP2(MaxInDim);
   DECLARE_OP2(ArgMax);
   DECLARE_OP2(Embedding);
+  DECLARE_OP2(EmbeddingDenseBackward);
   DECLARE_OP(Gelu);
   DECLARE_OP(GeluBackward);
   DECLARE_OP2(Mean);
@@ -289,6 +291,7 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferMatMul(const ir::Node* node);
   lazy_tensors::Shape InferUpdateSlice(const ir::ops::UpdateSlice* node);
   lazy_tensors::Shape InferEmbedding(const ir::ops::Embedding* node);
+  lazy_tensors::Shape InferEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBackward* node);
   lazy_tensors::Shape InferMean(const ir::ops::Mean* node);
 };
 
@@ -362,6 +365,7 @@ Var RAFNodeLowering::LowerToRAF(const ir::Node* node) {
     HANDLE_GENERIC_OP2(MaxInDim, at::aten::max)
     HANDLE_GENERIC_OP2(ArgMax, at::aten::argmax)
     HANDLE_GENERIC_OP2(Embedding, at::aten::embedding)
+    HANDLE_GENERIC_OP2(EmbeddingDenseBackward, at::aten::embedding_dense_backward)
     HANDLE_GENERIC_OP(Gelu, at::aten::gelu)
     HANDLE_GENERIC_OP(GeluBackward, at::aten::gelu_backward)
     HANDLE_GENERIC_OP2(Mean, at::aten::mean)
@@ -1059,6 +1063,11 @@ Var RAFNodeLowering::LowerEmbedding(const ir::ops::Embedding* node) {
   return BuildEmbedding(ops, node);
 }
 
+Var RAFNodeLowering::LowerEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBackward* node) {
+  LTC_LOG(FATAL) << "Not implemented!";
+  return Var();
+}
+
 Var BuildMean(const std::vector<Var>& ops, const ir::ops::Mean* node) {
   LTC_CHECK_EQ(node->operands().size(), 1U);
   Var x = ops[0];
@@ -1527,6 +1536,10 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
       return InferEmbedding(
           ir::NodeCast<ir::ops::Embedding>(node, ir::OpKind(at::aten::embedding)));
     }
+    case at::aten::embedding_dense_backward: {
+      return InferEmbeddingDenseBackward(
+          ir::NodeCast<ir::ops::EmbeddingDenseBackward>(node, ir::OpKind(at::aten::embedding_dense_backward)));
+    }
     case at::aten::mean: {
       return InferMean(ir::NodeCast<ir::ops::Mean>(node, ir::OpKind(at::aten::mean)));
     }
@@ -1955,6 +1968,13 @@ lazy_tensors::Shape RAFNodeLowering::InferEmbedding(const ir::ops::Embedding* no
   Var out = BuildEmbedding(ops, node);
   Expr body = InferType(ExtractBinding(out, ops));
   return ToLTCShape(body->checked_type());
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBackward* node) {
+  auto grad_shape = node->operand(0).shape();
+  auto num_weights = node->num_weights();
+  return lazy_tensors::Shape(grad_shape.element_type(), 
+    {num_weights, grad_shape.dimensions(grad_shape.rank()-1)}); 
 }
 
 #define DEFINE_INFER_COMPARISON_OP(name)                                   \

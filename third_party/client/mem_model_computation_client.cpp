@@ -249,13 +249,40 @@ double CalculateMemFromShape(const lazy_tensors::Shape& shape) {
   return size / 1048576.0;
 }
 
-bool IsInplaceOp(const c10::Symbol op) {
-  // Currently we treat all ops whose names end with an underscore as in-place ops
-  std::string op_name = std::string(op.toQualString());
-  bool is_inplace = pytorch_inplace_ops.count(op_name) || (op_name.back() == '_');
-  if (is_inplace)
-    LTC_LOG(INFO) << "Op " << op_name << " is an in-place op!";
-  return is_inplace;
+bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node, 
+                 const std::unordered_map<const torch_lazy_tensors::ir::Node*, TensorInfo>& live_tensors) {  
+  // Filter out nodes with no inputs (e.g., constant nodes)
+  if (node->operands().size() < 1)
+    return false;
+  
+  // Currently don't handle multi-output nodes
+  if (node->num_outputs() > 1)
+    return false;
+
+  // Check the first operand's use count
+  auto pred_node = node->operand(0).node;
+  auto pred_node_info = live_tensors.at(pred_node);
+  if (pred_node_info.use_cnt > 1)
+    return false;
+
+  // Check if the first operand is a view
+  if (pred_node_info.viewing != nullptr)
+    return false;
+  
+  // Check output shape
+  auto pred_node_shape = pred_node->shape();
+  auto output_shape = node->shape();
+  if (!(pred_node_shape == output_shape))
+    return false;
+
+  // Check for views of the predecessor
+  for (auto view : pred_node_info.viewers) {
+    auto view_info = live_tensors.at(view);
+    if (view_info.use_cnt > 0)
+      return false;
+  }
+
+  return true;
 }
 
 bool IsViewChangingOp(const c10::Symbol op) {
@@ -306,24 +333,6 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                         const std::unordered_map<int64_t, int64_t>& alias,
                         const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& param_alias,
                         const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& use_cnts) {
-  struct TensorInfo {
-    TensorInfo(double size, int64_t uses, bool param, const torch_lazy_tensors::ir::Node* orig_node) 
-    : size_mbs(size), use_cnt(uses), is_param(param), viewing(orig_node) {}
-
-    // Size of tensor in MBs
-    double size_mbs;
-    // Use count of this tensor
-    int64_t use_cnt;
-    // True if the tensor is a parameter or shares storage with a parameter
-    bool is_param;
-    // True if the tensor has undergone an in-place update and is replaced by a newer version
-    bool is_expired = false;
-    // If this "tensor" is actually a view, keep a pointer to the original node that allocated memory
-    const torch_lazy_tensors::ir::Node* viewing;
-    // If this tensor has multiple views, keep a set of pointers to each view
-    std::unordered_set<const torch_lazy_tensors::ir::Node*> viewers = {};
-  };
-
   double curr_mem = 0.0;
 
   // Maintain the current set of live tensors
@@ -366,15 +375,6 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
      *    tensor later instead. 
      * 4. All of its viewers have been deleted. 
      */
-    // for (auto node_with_info : live_tensors) {
-    //   auto node_ptr = node_with_info.first;
-    //   auto& info = node_with_info.second;
-    //   if ((info.use_cnt <= 0) && (!info.is_param) && (!info.is_expired) && (info.viewers.size() == 0)) {
-    //     curr_mem -= info.size_mbs;
-    //     LTC_LOG(INFO) << "Erase dead node " << node_ptr->ToString() << " for " << info.size_mbs << " MBs memory";
-    //     live_tensors.erase(node_ptr);
-    //   }
-    // }
     for (auto node_with_size : to_be_freed) {
       auto node_ptr = node_with_size.first;
       auto size_mbs = node_with_size.second;
@@ -398,8 +398,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
      *    In this case we don't do anything. 
      * 2. This node is not device_data(), but the op is an in-place op. In this case we don't increment 
      *    memory, but make the tensor associated with the input "expired" and create a new entry in 
-     *    the live tensor set to represent the output. Right now we only support in-place ops with one 
-     *    input. 
+     *    the live tensor set to represent the output. 
      * 3. This node is not device_data(), not an in-place op, but a "view-changing" op that changes 
      *    the view of a tensor without modifying its data (e.g., permute). In this case we do the same
      *    as above, except that the input tensor is not marked as expired. 
@@ -414,36 +413,33 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     bool is_inplace = false;
     bool is_alias = false;
     if (node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) {
-      // In-place op
-      if (IsInplaceOp(node->op().op)) {
+      // Check for in-place op. 
+      /* 
+       * Notice that due to the limitation of lazy tensor IR, we cannot find in-place ops from the 
+       * op() method of IR nodes. As a result, we take the following heuristic:
+       * - If the op's first operand is not a view, and 
+       * - It has zero remaining use count after this op, and 
+       * - All of the views of this operand has zero remaining use count, and
+       * - The output of this op has the same shape as the operand
+       * Then we treat this op as an in-place op. 
+       */
+      if (IsInplaceOp(node, live_tensors)) {
         LTC_LOG(INFO) << "|-Inplace op";
         is_inplace = true;
-        LTC_CHECK(node->operands().size() == 1) << "In-place ops with more than one inputs are currently not supported!";
         auto pred_node = node->operands()[0].node;
         // Mark the entry of the input as expired
         LTC_CHECK(live_tensors.count(pred_node)) << "Predecessor " << pred_node->ToString() << " is not live!";
         auto& pred_node_info = live_tensors.at(pred_node);
         pred_node_info.is_expired = true;
-        LTC_CHECK(outp_size == pred_node_info.size_mbs) << "In-place update but tensor sizes mismatch: "
-          << outp_size << " vs. " << pred_node_info.size_mbs;
         // Put a new entry. 
-        /*
-         * 1. If the predecessor is a parameter or aliases with a parameter, then the new tensor shares 
-         *    memory with a parameter. 
-         * 2. If the predecessor is a view, then we treat the new tensor as another view, although the
-         *    behavior of some ops might be undefined (e.g., doing an in-place ReLU on a view created
-         *    by an expand op). 
-         */
+        // If the predecessor is a parameter or aliases with a parameter, then the new tensor shares 
+        // memory with a parameter. 
         live_tensors.insert(
           std::make_pair(
             node, 
             TensorInfo(outp_size, use_cnts.at(node), pred_node_info.is_param, pred_node_info.viewing)
           )
         );
-        if (pred_node_info.viewing) {
-          LTC_LOG(INFO) << "Warning: in-place op " << node->ToString() << " on a view " << pred_node->ToString();
-          live_tensors.at(pred_node_info.viewing).viewers.insert(node);
-        }
       } else if (IsViewChangingOp(node->op().op)) {
         LTC_LOG(INFO) << "|-View-changing op";
         LTC_CHECK(node->operands().size() == 1) << "View-changing ops with more than one inputs are currently not supported!";

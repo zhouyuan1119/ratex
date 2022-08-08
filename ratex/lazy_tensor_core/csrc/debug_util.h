@@ -31,14 +31,16 @@ class DebugUtil {
   // indices of the tensors whose graph will be emitted.
   static std::string GetTensorsGraphInfo(lazy_tensors::Span<const LazyTensor> tensors,
                                          const std::vector<size_t>* indices,
-                                         GraphFormat format = GetDefaultGraphFormat());
+                                         GraphFormat format = GetDefaultGraphFormat(),
+                                         bool use_id_order = false);
 
   // If the environment variable LTC_SAVE_TENSORS_FILE is set to the proper
   // output path, an instance of the report returned by GetTensorsGraphInfo() is
   // saved.
   static void SaveTensorsGraphInfo(const char* name, lazy_tensors::Span<const LazyTensor> tensors,
                                    const std::vector<size_t>* indices,
-                                   GraphFormat format = GetDefaultGraphFormat());
+                                   GraphFormat format = GetDefaultGraphFormat(),
+                                   bool use_id_order = false);
 
   static bool ExperimentEnabled(const std::string& name);
 };

@@ -57,7 +57,8 @@ DebugUtil::GraphFormat DebugUtil::GetDefaultGraphFormat() {
 }
 
 std::string DebugUtil::GetTensorsGraphInfo(lazy_tensors::Span<const LazyTensor> tensors,
-                                           const std::vector<size_t>* indices, GraphFormat format) {
+                                           const std::vector<size_t>* indices, GraphFormat format,
+                                           bool use_id_order) {
   std::vector<const ir::Node*> root_nodes;
   std::vector<ir::Value> root_values;
   std::vector<lazy_tensors::hash_t> root_hashes;
@@ -101,7 +102,7 @@ std::string DebugUtil::GetTensorsGraphInfo(lazy_tensors::Span<const LazyTensor> 
 
   std::string graph_str;
   if (format == GraphFormat::kText) {
-    graph_str = ir::DumpUtil::ToText(root_nodes);
+    graph_str = ir::DumpUtil::ToText(root_nodes, use_id_order);
   } else if (format == GraphFormat::kDot) {
     graph_str = ir::DumpUtil::ToDot(root_nodes);
   } else if (format == GraphFormat::kBackend) {
@@ -115,12 +116,13 @@ std::string DebugUtil::GetTensorsGraphInfo(lazy_tensors::Span<const LazyTensor> 
 }
 
 void DebugUtil::SaveTensorsGraphInfo(const char* name, lazy_tensors::Span<const LazyTensor> tensors,
-                                     const std::vector<size_t>* indices, GraphFormat format) {
+                                     const std::vector<size_t>* indices, GraphFormat format,
+                                     bool use_id_order) {
   const std::string save_file =
       lazy_tensors::sys_util::GetEnvOrdinalPath("LTC_SAVE_TENSORS_FILE", "");
   if (!save_file.empty()) {
     static std::mutex lock;
-    std::string info = GetTensorsGraphInfo(tensors, indices, format);
+    std::string info = GetTensorsGraphInfo(tensors, indices, format, use_id_order);
     std::lock_guard<std::mutex> guard(lock);
     std::ofstream graph_file(save_file, std::ios_base::app);
     graph_file << "[" << name << "]\n" << info << "\n";

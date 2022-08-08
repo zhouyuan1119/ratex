@@ -928,7 +928,7 @@ std::vector<at::Tensor> LazyTensor::GetTensorsOpByOp(std::vector<LazyTensor>* te
   SyncTensorCollection coll = CollectSyncTensors(*tensors, config);
   std::vector<lazy_tensors::ComputationClient::DataPtr> async_tensors_data;
   if (!coll.indices.empty()) {
-    DebugUtil::SaveTensorsGraphInfo("GetTensorsOpByOp", *tensors, &coll.indices);
+    DebugUtil::SaveTensorsGraphInfo("GetTensorsOpByOp", *tensors, &coll.indices, DebugUtil::GetDefaultGraphFormat());
 
     std::vector<ir::Value> roots = CollectRoots(*tensors, coll.indices);
     async_tensors_data = OpByOpExecutor::Get()->Execute(roots, coll.device.ToString(), {});
@@ -1516,7 +1516,7 @@ std::shared_ptr<LazyTensor::Async> LazyTensor::SyncTensorsGraphInternal(
   if (coll.indices.empty()) {
     return nullptr;
   }
-  DebugUtil::SaveTensorsGraphInfo("ScheduleSyncTensorsGraph", *tensors, &coll.indices);
+  DebugUtil::SaveTensorsGraphInfo("ScheduleSyncTensorsGraph", *tensors, &coll.indices, DebugUtil::GetDefaultGraphFormat(), true);
 
   PostOrderData po_data = RunPostOrder(*tensors, coll.indices);
   coll.hash = lazy_tensors::util::HashCombine(coll.hash,

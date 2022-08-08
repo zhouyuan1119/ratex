@@ -214,8 +214,15 @@ std::string DumpUtil::PostOrderToDot(lazy_tensors::Span<const Node* const> post_
   return ss.str();
 }
 
-std::string DumpUtil::ToText(lazy_tensors::Span<const Node* const> nodes) {
+std::string DumpUtil::ToText(lazy_tensors::Span<const Node* const> nodes,
+                             bool use_id_order) {
   auto post_order = Util::ComputePostOrder(nodes);
+  if (use_id_order) {
+    std::sort(post_order.begin(), post_order.end(), 
+      [] (const Node* const node0, const Node* const node1) {
+        return node0->id() < node1->id();
+      }); 
+  }
   return PostOrderToText(post_order, nodes);
 }
 

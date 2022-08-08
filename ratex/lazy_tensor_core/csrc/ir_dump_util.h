@@ -23,7 +23,8 @@ class DumpUtil {
   static std::string PostOrderToDot(lazy_tensors::Span<const Node* const> post_order,
                                     lazy_tensors::Span<const Node* const> roots);
 
-  static std::string ToText(lazy_tensors::Span<const Node* const> nodes);
+  static std::string ToText(lazy_tensors::Span<const Node* const> nodes,
+                            bool use_id_order = false);
 
   static std::string PostOrderToText(lazy_tensors::Span<const Node* const> post_order,
                                      lazy_tensors::Span<const Node* const> roots);

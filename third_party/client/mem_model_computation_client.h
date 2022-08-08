@@ -23,8 +23,28 @@ const std::unordered_set<std::string> pytorch_inplace_ops({
 const std::unordered_set<std::string> pytorch_view_changing_ops({
   "aten::permute",
   "aten::expand",
-  "aten::view"
+  "aten::view",
+  "aten::select" // for torch.narrow and torch.select
 });
+
+/*! \brief Struct for storing live tensor information in memory analysis. */
+struct TensorInfo {
+  TensorInfo(double size, int64_t uses, bool param, const torch_lazy_tensors::ir::Node* orig_node) 
+  : size_mbs(size), use_cnt(uses), is_param(param), viewing(orig_node) {}
+
+  // Size of tensor in MBs
+  double size_mbs;
+  // Use count of this tensor
+  int64_t use_cnt;
+  // True if the tensor is a parameter or shares storage with a parameter
+  bool is_param;
+  // True if the tensor has undergone an in-place update and is replaced by a newer version
+  bool is_expired = false;
+  // If this "tensor" is actually a view, keep a pointer to the original node that allocated memory
+  const torch_lazy_tensors::ir::Node* viewing;
+  // If this tensor has multiple views, keep a set of pointers to each view
+  std::unordered_set<const torch_lazy_tensors::ir::Node*> viewers = {};
+};
 
 /*!
  * \brief This class defines the computation client for memory modeling. It only

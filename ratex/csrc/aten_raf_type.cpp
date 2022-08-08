@@ -440,6 +440,8 @@ at::Tensor LazyNativeFunctions::where(const at::Tensor& condition, const at::Ten
 at::Tensor LazyNativeFunctions::_softmax(const at::Tensor& self, int64_t dim,
                                          bool /* half_to_float */) {
   LTC_FN_COUNTER("raf::");
+  if (dim < 0)
+    dim = self.dim() + dim;
   LTC_CHECK_EQ(dim, self.dim() - 1);
   return bridge::AtenFromLtcTensor(
       LazyTensor::softmax(bridge::raf_backend::GetLtcTensor(self), dim, c10::nullopt));
@@ -1094,7 +1096,8 @@ at::Tensor LazyNativeFunctions::embedding(const at::Tensor& weight, const at::Te
                                           int64_t padding_idx, bool scale_grad_by_freq,
                                           bool sparse) {
   LTC_FN_COUNTER("raf::");
-  if (scale_grad_by_freq || sparse || padding_idx != -1) {
+  // if (scale_grad_by_freq || sparse || padding_idx != -1) {
+  if (scale_grad_by_freq || sparse) {
     RATEX_VLOG(3) << "Unsupported parameters - Falling back to CPU (currently sparse, "
                      "scale_grad_by_freq, and padding are not support)";
     return FALLBACK_ATEN_OP(embedding, weight, indices, padding_idx, scale_grad_by_freq, sparse);

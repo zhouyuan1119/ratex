@@ -32,7 +32,7 @@ class BertModelWrapper(nn.Module):
 config = BertConfig(
     vocab_size=30522,
     hidden_size=768,
-    num_hidden_layers=2,
+    num_hidden_layers=12,
     num_attention_heads=12,
     intermediate_size=3072,
     hidden_act="relu",
@@ -49,7 +49,7 @@ def main():
         input_shape=(64, 256), output_shape=(64,), 
         input_dtype=torch.int64, output_dtype=torch.int64, 
         input_range=[0, 30522], output_range=[0, 10],
-        n_batches=1)
+        n_batches=2)
     model_cuda = model_cuda.cuda()
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_bs = profile_training_peak_memory(
@@ -57,7 +57,7 @@ def main():
         input_shape=(64, 256), output_shape=(64,), 
         input_dtype=torch.int64, output_dtype=torch.int64, 
         input_range=[0, 30522], output_range=[0, 10],
-        n_batches=1)
+        n_batches=2)
 
 if __name__ == "__main__":
     main()
