@@ -251,6 +251,7 @@ class RAFNodeLowering : public NodeLowering {
   DECLARE_OP2(Mean);
   DECLARE_OP2(SoftmaxBackward);
   DECLARE_OP2(Softmax);
+  DECLARE_OP2(CumSum);
   lazy_tensors::Shape InferNe(const ir::Node* node);
   lazy_tensors::Shape InferEq(const ir::Node* node);
   lazy_tensors::Shape InferGt(const ir::Node* node);
@@ -293,6 +294,7 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferEmbedding(const ir::ops::Embedding* node);
   lazy_tensors::Shape InferEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBackward* node);
   lazy_tensors::Shape InferMean(const ir::ops::Mean* node);
+  lazy_tensors::Shape InferCumSum(const ir::ops::CumSum* node);
 };
 
 #undef DECLARE_OP2
@@ -371,6 +373,7 @@ Var RAFNodeLowering::LowerToRAF(const ir::Node* node) {
     HANDLE_GENERIC_OP2(Mean, at::aten::mean)
     HANDLE_GENERIC_OP2(Softmax, at::aten::softmax)
     HANDLE_GENERIC_OP2(SoftmaxBackward, at::aten::_softmax_backward_data)
+    HANDLE_GENERIC_OP2(CumSum, at::aten::cumsum)
     case at::prim::Constant: {
       // TODO(asuhan): rework to remove ambiguity between Scalar and Constant
       // nodes to make dynamic_cast unnecessary.
@@ -1068,6 +1071,11 @@ Var RAFNodeLowering::LowerEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBa
   return Var();
 }
 
+Var RAFNodeLowering::LowerCumSum(const ir::ops::CumSum* node) {
+  LTC_LOG(FATAL) << "Not implemented!";
+  return Var();
+}
+
 Var BuildMean(const std::vector<Var>& ops, const ir::ops::Mean* node) {
   LTC_CHECK_EQ(node->operands().size(), 1U);
   Var x = ops[0];
@@ -1543,6 +1551,9 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
     case at::aten::mean: {
       return InferMean(ir::NodeCast<ir::ops::Mean>(node, ir::OpKind(at::aten::mean)));
     }
+    case at::aten::cumsum: {
+      return InferCumSum(ir::NodeCast<ir::ops::CumSum>(node, ir::OpKind(at::aten::cumsum)));
+    }
     default: {
       if (kind == *ir::ops::ltc_generic_slice) {
         return InferGenericSlice(
@@ -1975,6 +1986,11 @@ lazy_tensors::Shape RAFNodeLowering::InferEmbeddingDenseBackward(const ir::ops::
   auto num_weights = node->num_weights();
   return lazy_tensors::Shape(grad_shape.element_type(), 
     {num_weights, grad_shape.dimensions(grad_shape.rank()-1)}); 
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferCumSum(const ir::ops::CumSum* node) {
+  auto input_shape = node->operand(0).shape();
+  return lazy_tensors::Shape(input_shape); 
 }
 
 #define DEFINE_INFER_COMPARISON_OP(name)                                   \

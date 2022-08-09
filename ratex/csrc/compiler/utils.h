@@ -104,6 +104,8 @@ inline DType ToRAFDType(const PrimitiveType type) {
   switch (type) {
     case PrimitiveType::S8:
       return DType(DTypeCode::kInt(), 8);
+    case PrimitiveType::S32:
+      return DType(DTypeCode::kInt(), 32);
     case PrimitiveType::S64:
       return DType(DTypeCode::kInt(), 64);
     case PrimitiveType::PRED:
