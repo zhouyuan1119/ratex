@@ -257,8 +257,7 @@ bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node,
   /* 
    * Notice that due to the limitation of lazy tensor IR, we cannot find in-place ops from the 
    * op() method of IR nodes. As a result, we take the following heuristic:
-   * - If the op's first operand is not a view, and 
-   * - It has zero remaining use count after this op, and 
+   * - If the op's first operand has zero remaining use count after this op, and 
    * - All of the views of this operand has zero remaining use count, and
    * - The first output of this op has the same shape as the operand
    * Then we treat this op as an in-place op. We only check the first-input vs. the first-output
@@ -276,8 +275,17 @@ bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node,
     return false;
 
   // Check if the first operand is a view
-  if (pred_node_info.is_view)
-    return false;
+  if (pred_node_info.is_view) {
+    // If the first operand is a view, must check its original tensor
+    auto viewed_tensor = pred_node_info.viewing;
+    // The original tensor must have no active views other than this one
+    // It must also have no future uses
+    auto viewed_tensor_info = live_tensors.at(viewed_tensor);
+    if ((viewed_tensor_info.use_cnt > 0) || (viewed_tensor_info.viewers.size() > 1) ||
+        (viewed_tensor_info.size_mbs != pred_node_info.size_mbs))
+      return false;
+    // If this check passes, go on to check shape
+  }
   
   // Check output shape
   auto pred_node_shape = pred_node.shape();
@@ -440,6 +448,12 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         LTC_CHECK(live_tensors.count(pred_tensor)) << "Predecessor " << pred_tensor.ToString() << " is not live!";
         auto& pred_node_info = live_tensors.at(pred_tensor);
         pred_node_info.is_expired = true;
+        // If the predecesor is a view, mark its source as expired too
+        if (pred_node_info.is_view) {
+          auto& viewing_tensor_info = live_tensors.at(pred_node_info.viewing);
+          viewing_tensor_info.is_expired = true;
+        }
+
         // Put a new entry for each output, special handling for the first one and assume the other outputs
         // are all newly allocated tensors
         // If the predecessor is a parameter or aliases with a parameter, then the new tensor shares 
