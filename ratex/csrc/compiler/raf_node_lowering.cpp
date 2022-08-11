@@ -1819,23 +1819,31 @@ lazy_tensors::Shape RAFNodeLowering::InferUpdateSlice(const ir::ops::UpdateSlice
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferDropout(const ir::ops::Dropout* node) {
-  LTC_CHECK_EQ(node->operands().size(), 1U);
-  std::vector<Var> ops;
-  ops.push_back(MakeVar("operand", ToRAFType(node->operand(0).shape())));
-  Var out = BuildDropout(ops, node);
-  Expr body = InferType(ExtractBinding(out, ops));
-  return ToLTCShape(body->checked_type());
+  // RAF dropout output: fp32, fp32, uint8
+  // PyTorch dropout output: might be fp32, uint8
+  std::vector<Shape> elem_shapes;
+  auto input_shape = node->operand(0).shape();
+  elem_shapes.push_back(Shape(input_shape));
+  elem_shapes.push_back(Shape(PrimitiveType::U8, input_shape.dimensions()));
+  return Shape(elem_shapes);
+  // LTC_CHECK_EQ(node->operands().size(), 1U);
+  // std::vector<Var> ops;
+  // ops.push_back(MakeVar("operand", ToRAFType(node->operand(0).shape())));
+  // Var out = BuildDropout(ops, node);
+  // Expr body = InferType(ExtractBinding(out, ops));
+  // return ToLTCShape(body->checked_type());
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferDropoutBackward(const ir::ops::DropoutBackward* node) {
-  LTC_CHECK_EQ(node->operands().size(), 3U);
-  std::vector<Var> ops;
-  for (const auto& x : node->operands()) {
-    ops.push_back(MakeVar("operand", ToRAFType(x.shape())));
-  }
-  Var out = BuildDropoutBackward(ops, node);
-  Expr body = InferType(ExtractBinding(out, ops));
-  return ToLTCShape(body->checked_type());
+  // LTC_CHECK_EQ(node->operands().size(), 3U);
+  // std::vector<Var> ops;
+  // for (const auto& x : node->operands()) {
+  //   ops.push_back(MakeVar("operand", ToRAFType(x.shape())));
+  // }
+  // Var out = BuildDropoutBackward(ops, node);
+  // Expr body = InferType(ExtractBinding(out, ops));
+  // return ToLTCShape(body->checked_type());
+  return Shape(node->operand(0).shape());
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferMm(const ir::Node* node) {

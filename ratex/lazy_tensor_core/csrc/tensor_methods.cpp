@@ -995,20 +995,17 @@ LazyTensor LazyTensor::div(const LazyTensor& input, const at::Scalar& other) {
   return input.CreateFrom(input_value / other_value, scalar_type);
 }
 
-std::tuple<LazyTensor, LazyTensor, LazyTensor> LazyTensor::dropout(const LazyTensor& input,
-                                                                   double p,
-                                                                   c10::optional<bool> train) {
+std::tuple<LazyTensor, LazyTensor> LazyTensor::dropout(const LazyTensor& input,
+                                                       double p,
+                                                       c10::optional<bool> train) {
   ir::NodePtr node = ir::MakeNode<ir::ops::Dropout>(input.GetIrValue(), p);
   auto output = input.CreateFrom(ir::Value(node, 0));
   auto mask = input.CreateFrom(ir::Value(node, 1));
-  auto reserve_space = input.CreateFrom(ir::Value(node, 2));
-  return std::make_tuple(std::move(output), std::move(mask), std::move(reserve_space));
+  return std::make_tuple(std::move(output), std::move(mask));
 }
 
-LazyTensor LazyTensor::dropout_backward(const LazyTensor& dy, const LazyTensor& mask,
-                                        const LazyTensor& reserve_space) {
-  return dy.CreateFrom(ir::MakeNode<ir::ops::DropoutBackward>(dy.GetIrValue(), mask.GetIrValue(),
-                                                              reserve_space.GetIrValue()));
+LazyTensor LazyTensor::dropout_backward(const LazyTensor& dy, const LazyTensor& mask) {
+  return dy.CreateFrom(ir::MakeNode<ir::ops::DropoutBackward>(dy.GetIrValue(), mask.GetIrValue()));
 }
 
 LazyTensor LazyTensor::eq(const LazyTensor& input, const at::Scalar& other) {

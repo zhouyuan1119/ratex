@@ -16,7 +16,7 @@ namespace ops {
 
 class DropoutBackward : public Node {
  public:
-  DropoutBackward(const Value& grad_output, const Value& mask, const Value& reserve_space);
+  DropoutBackward(const Value& grad_output, const Value& mask);
 
   NodePtr Clone(OpList operands) const override;
 

@@ -121,8 +121,7 @@ torch::Tensor Dropout::forward(torch::autograd::AutogradContext* ctx, const at::
                                double p, bool train) {
   ctx->saved_data["p"] = p;
   auto outputs = LazyTensor::dropout(bridge::GetLtcTensor(input), p, train);
-  ctx->save_for_backward({bridge::AtenFromLtcTensor(std::get<1>(outputs)),
-                          bridge::AtenFromLtcTensor(std::get<2>(outputs))});
+  ctx->save_for_backward({bridge::AtenFromLtcTensor(std::get<1>(outputs))});
   return bridge::AtenFromLtcTensor(std::get<0>(outputs));
 }
 
@@ -132,9 +131,8 @@ torch::autograd::variable_list Dropout::backward(torch::autograd::AutogradContex
 
   auto saved = ctx->get_saved_variables();
   auto mask = bridge::GetLtcTensor(saved[0]);
-  auto reserved_space = bridge::GetLtcTensor(saved[1]);
   auto grad = bridge::GetLtcTensor(grad_output[0]);
-  auto results = LazyTensor::dropout_backward(grad, mask, reserved_space);
+  auto results = LazyTensor::dropout_backward(grad, mask);
 
   auto grad_outputs = bridge::AtenFromLtcTensor(results);
   torch::Tensor undef;

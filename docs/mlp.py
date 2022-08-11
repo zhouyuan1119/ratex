@@ -21,27 +21,26 @@ import time
 import os
 import copy
 from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_training_peak_memory
-import transformers
+
 class TorchMLP(nn.Module):
     def __init__(self, input_shape=256, num_classes=8):
         super(TorchMLP, self).__init__()
         self.linear1 = nn.Linear(input_shape, 4096, bias=False)
         self.linear2 = nn.Linear(4096, 8192, bias=False)
-        self.linear3 = nn.Linear(8192, 2048, bias=False)
-        self.linear4 = nn.Linear(2048, 256, bias=False)
-        self.linear5 = nn.Linear(256, num_classes, bias=False)
+        self.linear3 = nn.Linear(8192, num_classes, bias=False)
+        self.dropout = nn.Dropout(p=0.8)
+        self.layer_norm = nn.LayerNorm(8192)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         out = self.linear1(x)
         out = self.relu(out)  # pylint: disable=no-member
+        out = self.dropout(out)
         out = self.linear2(out)
         out = self.relu(out)
+        out = self.layer_norm(out)
+        out = self.dropout(out)
         out = self.linear3(out)
-        out = self.relu(out)
-        out = self.linear4(out)
-        out = self.relu(out)
-        out = self.linear5(out)
         return out
 
 def main():

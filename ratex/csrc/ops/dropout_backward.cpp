@@ -20,15 +20,14 @@ namespace torch_lazy_tensors {
 namespace ir {
 namespace ops {
 
-DropoutBackward::DropoutBackward(const Value& grad_output, const Value& mask,
-                                 const Value& reserve_space)
-    : Node(raf_dropout_backward, {grad_output, mask, reserve_space},
+DropoutBackward::DropoutBackward(const Value& grad_output, const Value& mask)
+    : Node(raf_dropout_backward, {grad_output, mask},
            /*num_outputs=*/1) {
   SetShapeDeferred([&]() { return compiler::NodeLowering::Get()->Infer(this); });
 }
 
 NodePtr DropoutBackward::Clone(OpList operands) const {
-  return MakeNode<DropoutBackward>(operands.at(0), operands.at(1), operands.at(2));
+  return MakeNode<DropoutBackward>(operands.at(0), operands.at(1));
 }
 
 std::string DropoutBackward::ToString() const {

@@ -14,7 +14,7 @@ namespace ir {
 namespace ops {
 
 Dropout::Dropout(const Value& input, double p)
-    : Node(ir::OpKind(at::aten::dropout), {input}, 3, lazy_tensors::util::MHash(p)), p_(p) {
+    : Node(ir::OpKind(at::aten::dropout), {input}, 2, lazy_tensors::util::MHash(p)), p_(p) {
   SetShapeDeferred([&]() { return compiler::NodeLowering::Get()->Infer(this); });
 }
 
