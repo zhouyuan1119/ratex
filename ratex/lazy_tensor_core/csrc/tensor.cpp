@@ -620,15 +620,6 @@ void LazyTensor::SetIrValue(ir::Value ir_value, bool inplace) {
     // within an in-place execution context, we need to update the view's
     // alias as well.
     auto curr_irvalue = CurrentIrValue();
-    if (curr_irvalue) {
-      LTC_LOG(INFO) << "Current node: " << curr_irvalue.node->ToString();
-      LTC_LOG(INFO) << "Old view: " << data()->view->GetViewIrNode().ir_value.node->ToString();
-      LTC_LOG(INFO) << "Update view to: " << ir_value.node->ToString();
-    } else {
-      LTC_LOG(INFO) << "Current node is nullptr";
-      LTC_LOG(INFO) << "Old view: " << data()->view->GetViewIrNode().ir_value.node->ToString();
-      LTC_LOG(INFO) << "Update view to: " << ir_value.node->ToString();
-    }
     data()->view = UpdateView(data()->view, std::move(ir_value));
     data()->generation += 1;
   } else {

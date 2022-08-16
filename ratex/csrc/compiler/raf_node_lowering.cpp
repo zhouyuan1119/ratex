@@ -295,6 +295,7 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferEmbeddingDenseBackward(const ir::ops::EmbeddingDenseBackward* node);
   lazy_tensors::Shape InferMean(const ir::ops::Mean* node);
   lazy_tensors::Shape InferCumSum(const ir::ops::CumSum* node);
+  lazy_tensors::Shape InferIndexGet(const ir::ops::IndexGet* node);
 };
 
 #undef DECLARE_OP2
@@ -1554,6 +1555,9 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
     case at::aten::cumsum: {
       return InferCumSum(ir::NodeCast<ir::ops::CumSum>(node, ir::OpKind(at::aten::cumsum)));
     }
+    case at::aten::index: {
+      return InferIndexGet(ir::NodeCast<ir::ops::IndexGet>(node, ir::OpKind(at::aten::index))); 
+    }
     default: {
       if (kind == *ir::ops::ltc_generic_slice) {
         return InferGenericSlice(
@@ -1688,6 +1692,42 @@ lazy_tensors::Shape RAFNodeLowering::InferConvolutionBwdOverrideable(const ir::o
   auto input_shape = node->operand(1).shape();
   auto wgt_shape = node->operand(2).shape();
   return lazy_tensors::Shape({lazy_tensors::Shape(input_shape), lazy_tensors::Shape(wgt_shape)});
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferIndexGet(const ir::ops::IndexGet* node) {
+  /*
+   * The inputs of an IndexGet node are organized as follows:
+   * 1. The original tensor (base);
+   * 2. All indices stacked as one single tensor. 
+   * For example, A[torch.arange(4), torch.tensor([1, 3, 4, 5])] will become:
+   *   indices = aten::stack(torch.arange(4), torch.tensor([1, 3, 4, 5]))
+   *   out = aten::index(A, indices)
+   * In this way, all indices must be 1D tensors and have the same size. When computing
+   * output shape, starting from the first dimension of the base tensor, for all dims
+   * with a corresponding index tensor, the result shape has ONE SINGLE DIMENSION for 
+   * all of them, and the size of this dimension equals to the length of the index tensor. 
+   * For other dimensions without index tensors, the output shape at that dim equals
+   * to the shape of the original tensor at that dimension. 
+   */
+  auto input_shape = node->operand(0).shape();
+  auto index_shape = node->operand(1).shape();
+  LTC_CHECK(index_shape.rank() == 2) << "Expecting 2D tensor for index, but got " << index_shape.ToString();
+  auto start_dim = node->start_dim();
+  LTC_CHECK(start_dim + index_shape.dimensions(1) < input_shape.rank()) << "Too many indices!";
+  bool pushed = false;
+  std::vector<int64_t> output_dims;
+  for (int i = 0; i < input_shape.rank(); i ++) {
+    int64_t input_dim = input_shape.dimensions(i);
+    if ((i < start_dim) || (i >= start_dim + index_shape.dimensions(1))) {
+      output_dims.push_back(input_dim);
+    } else if (!pushed) {
+      output_dims.push_back(index_shape.dimensions(0));
+      pushed = true;
+    }
+  }
+  auto shape = lazy_tensors::Shape(input_shape.element_type(), output_dims);
+  LTC_LOG(INFO) << "Inferred shape: " << shape.ToString();
+  return shape;
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferAvgPool2d(const ir::ops::AvgPoolNd* node) {

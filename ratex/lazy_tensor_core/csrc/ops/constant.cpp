@@ -22,10 +22,12 @@ Constant::Constant(lazy_tensors::Literal value)
 std::string Constant::ToString() const {
   // The Literal to string conversion produces \n separated content, which we do
   // not want. It can also produce giant strings, but that's a different issue.
-  std::string value_as_string = value_.ToStringWithoutShape();
-  std::replace(value_as_string.begin(), value_as_string.end(), '\n', ';');
+  LTC_LOG(INFO) << Node::ToString();
+  // std::string value_as_string = value_.ToStringWithoutShape();
+  // std::replace(value_as_string.begin(), value_as_string.end(), '\n', ';');
   std::stringstream ss;
-  ss << Node::ToString() << ", value=" << value_as_string;
+  // ss << Node::ToString() << ", value=" << value_as_string;
+  ss << Node::ToString();
   return ss.str();
 }
 
