@@ -3,6 +3,7 @@
 
 """Redefine the interfaces similar to lazy_model.py in lazy_tensor_core."""
 # pylint: disable=invalid-name, protected-access, c-extension-no-member, too-many-nested-blocks
+from numpy import iterable
 import torch
 
 from raf import distributed as dist
@@ -135,16 +136,18 @@ def reduce_gradients(optimizer, groups=None):
 def dummy(input):
     """
         A dummy op to mark layer boundaries. This op does not perform any compute. 
+        Input can be a tuple, list, or a single tensor. For each element in the input,
+        if it is a tensor, then it goes through the LTC dummy operator. Otherwise it is
+        returned as is. 
     """
-    if isinstance(input, torch.Tensor):
-        return _RATEXC._ltc_dummy(input)
-    else:
-        # Must be tuple of tensors or None
-        ret = tuple()
-        for t in input:
-          if t is None:
-            ret = ret + (None,)
-          else:
-            assert isinstance(t, torch.Tensor), 'Each element of the input tuple must be torch.Tensor or None!'
-            ret = ret + (_RATEXC._ltc_dummy(t),)
-        return ret
+    if not (isinstance(input, list) or isinstance(input, tuple)):
+        assert isinstance(input, torch.Tensor), "Only lists, tuples, and single torch tensor are allowed!"
+        input = [input]
+    
+    ret = []
+    for elm in input:
+        if isinstance(elm, torch.Tensor):
+            ret.append(_RATEXC._ltc_dummy(elm))
+        else:
+            ret.append(elm)
+    return ret[0] if len(ret) == 1 else tuple(ret)

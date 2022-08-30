@@ -6,6 +6,40 @@ import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
 from ratex.core.lazy_model import dummy
 
+class DummyFunc(torch.autograd.Function):
+    """
+        A function to insert a dummy op into the LTC IR. 
+    """
+
+    @staticmethod
+    def forward(ctx, input):
+        # We don't need to save anything
+        return dummy(input)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        return dummy(grad_output)
+
+class LayerWrapper(torch.nn.Module):
+    """
+        A simple wrapper around a PyTorch NN module. This wrapper will insert one special op after
+        the forward/backward pass of the wrapped module. 
+    """
+
+    # A list shared by all wrappers to track how layers are executed
+    executed_layers = []
+
+    def __init__(self, mod: torch.nn.Module, name: str = None):
+        super(LayerWrapper, self).__init__()
+        self.name_ = name
+        self.mod_ = mod
+        self.dummy = DummyFunc.apply
+
+    def forward(self, *args, **kwargs):
+        res = self.mod_(*args, **kwargs)
+        LayerWrapper.executed_layers.append(self.name_)
+        return self.dummy(res)
+
 def random_torch_tensor(shape, dtype, range=None):
     """ Simple utility to create a random torch tensor of given type """
     if (dtype == torch.float32) or (dtype == torch.float16) or (dtype == torch.float64):
@@ -48,18 +82,22 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.to(device="lazy")
-        # inputs.requires_grad = True
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.to(device="lazy")  # One-hot
+        marker_tensor = random_torch_tensor((1,), torch.float32)
+        marker_tensor = marker_tensor.to(device="lazy")
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = loss_fn(outputs, labels)
         loss.backward()
+        # Insert an additional dummy op here to mark the boundary of the last layer's bwd
+        _ = DummyFunc.apply(marker_tensor)
         optimizer.step()
         lm.mark_step()
         peak_mem_batch = lm.get_peak_memory()
         print('Analyzed peak memory for batch {}: {}'.format(batch, peak_mem_batch))
         peak_mem_mbs = max(peak_mem_mbs, peak_mem_batch)
+        LayerWrapper.executed_layers.clear()
     
     return peak_mem_mbs
 
@@ -85,45 +123,6 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         optimizer.step()
         print("Profiled peak memory for batch {}: {}".format(i, torch.cuda.max_memory_allocated() / (1024*1024)))
     return torch.cuda.max_memory_allocated()
-
-class DummyFunc(torch.autograd.Function):
-    """
-        A function to insert a dummy op into the LTC IR. 
-    """
-
-    @staticmethod
-    def forward(ctx, input):
-        # We don't need to save anything
-        return dummy(input)
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        return dummy(grad_output)
-
-class LayerWrapper(torch.nn.Module):
-    """
-        A simple wrapper around a PyTorch NN module. This wrapper will insert one special op after
-        the forward/backward pass of the wrapped module. 
-    """
-    def __init__(self, mod: torch.nn.Module, name: str = None):
-        super(LayerWrapper, self).__init__()
-        self.name_ = name
-        self.mod_ = mod
-        # self.mod_.register_forward_hook(self._forward_hook)
-        # self.mod_.register_full_backward_hook(self._backward_hook)
-        self.dummy = DummyFunc.apply
-
-    def forward(self, *args, **kwargs):
-        res = self.mod_(*args, **kwargs)
-        return self.dummy(res)
-
-    def _forward_hook(self, mod, input, output):
-        print('Forward hook!') 
-        return dummy(output) 
-    
-    def _backward_hook(self, mod, grad_input, grad_output):
-        print('Backward hook!')  
-        return dummy(grad_input)
 
 def wrap_model(model: torch.nn.Module, cur_depth: int = 0, max_depth: int = 1):
     """
