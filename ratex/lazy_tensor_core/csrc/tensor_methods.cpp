@@ -23,6 +23,7 @@
 #include "lazy_tensor_core/csrc/ops/all_gather.h"
 #include "lazy_tensor_core/csrc/ops/all_reduce.h"
 #include "lazy_tensor_core/csrc/ops/all_to_all.h"
+#include "lazy_tensor_core/csrc/ops/dummy.h"
 #include "lazy_tensor_core/csrc/ops/amp_foreach_non_finite_check_and_unscale.h"
 #include "lazy_tensor_core/csrc/ops/amp_update_scale.h"
 #include "lazy_tensor_core/csrc/ops/any.h"
@@ -309,6 +310,11 @@ ViewInfo CreateAsStridedViewInfo(const lazy_tensors::Shape& input_shape, std::ve
 //////////////////////////////////////////////////////////////////////////////
 // Special operators follows here, listed in alphabetical order.
 //////////////////////////////////////////////////////////////////////////////
+
+LazyTensor LazyTensor::dummy(const LazyTensor& input) {
+  return input.CreateFrom(ir::Value(ir::MakeNode<ir::ops::Dummy>(input.GetIrValue()), 0));
+}
+
 std::pair<LazyTensor, ir::Value> LazyTensor::all_reduce(const LazyTensor& input,
                                                         const ir::Value& token,
                                                         AllReduceType reduce_type, double scale,

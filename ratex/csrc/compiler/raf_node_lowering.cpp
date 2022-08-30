@@ -1589,6 +1589,9 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
         return InferDropoutBackward(
             ir::NodeCast<ir::ops::DropoutBackward>(node, *ir::ops::raf_dropout_backward));
       }
+      if (kind == *ir::ops::ltc_dummy) {
+        return Shape(node->operand(0).shape());
+      }
       LTC_LOG(FATAL) << "Shape inference not supported for operator: " << kind;
     }
   }
@@ -1691,7 +1694,9 @@ lazy_tensors::Shape RAFNodeLowering::InferConvolutionOverrideable(const ir::ops:
 lazy_tensors::Shape RAFNodeLowering::InferConvolutionBwdOverrideable(const ir::ops::ConvolutionBackwardOverrideable* node) {
   auto input_shape = node->operand(1).shape();
   auto wgt_shape = node->operand(2).shape();
-  return lazy_tensors::Shape({lazy_tensors::Shape(input_shape), lazy_tensors::Shape(wgt_shape)});
+  auto bias_shape = lazy_tensors::Shape(wgt_shape.element_type(), {wgt_shape.dimensions(0)});
+  return lazy_tensors::Shape({lazy_tensors::Shape(input_shape), lazy_tensors::Shape(wgt_shape), 
+                              lazy_tensors::Shape(bias_shape)});
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferIndexGet(const ir::ops::IndexGet* node) {

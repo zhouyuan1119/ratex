@@ -173,6 +173,11 @@ std::shared_ptr<ir::Value> AllReduceInPlace(
       LazyTensor::all_reduce(&xtensors, *token, GetReduceType(reduce_type), scale, replica_groups));
 }
 
+at::Tensor Dummy(const at::Tensor& input) {
+  LazyTensor result = LazyTensor::dummy(bridge::GetLtcTensor(input));
+  return bridge::AtenFromLtcTensor(std::move(result));
+}
+
 std::pair<at::Tensor, std::shared_ptr<ir::Value>> AllReduce(
     const std::string& reduce_type, const at::Tensor& input,
     const std::shared_ptr<ir::Value>& token, double scale,
@@ -504,6 +509,9 @@ void InitLtcModuleBindings(py::module m) {
           }
           return new_token;
         });
+  m.def("_ltc_dummy", [](const at::Tensor& input) {
+    return Dummy(input);
+  });
   m.def("_ltc_all_reduce", [](const std::string& reduce_type, const at::Tensor& input,
                               const std::shared_ptr<ir::Value>& token, double scale,
                               const py::list& groups) {

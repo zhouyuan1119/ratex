@@ -20,12 +20,12 @@ from torchvision import datasets, models, transforms
 import time
 import os
 import copy
-from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_training_peak_memory, random_torch_tensor
+from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_training_peak_memory, wrap_model
 
 class TorchLeNet(nn.Module):
     def __init__(self, input_shape=28, num_classes=10):
         super(TorchLeNet, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5, padding=2, bias=False)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=6, kernel_size=5, bias=False)
         self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5, bias=False)
         self.linear1 = nn.Linear(((input_shape // 2 - 4) // 2) ** 2 * 16, 120)
         self.linear2 = nn.Linear(120, 84)
@@ -44,18 +44,39 @@ class TorchLeNet(nn.Module):
         out = self.linear3(out)
         return out
 
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.AvgPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 5 * 5)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
 def main():
     model_lt = TorchLeNet()
     model_cuda = copy.deepcopy(model_lt)
+    model_lt = wrap_model(model_lt)
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()
     peak_memory_mbs = analyze_training_peak_memory(
-        model_lt, optimizer_lt, loss_fn, (4, 1, 28, 28), (4,), torch.float32, torch.int64, output_range=[0, 10])
+        model_lt, optimizer_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     model_cuda = model_cuda.cuda()
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_bs = profile_training_peak_memory(
-        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 1, 28, 28), (4,), torch.float32, torch.int64, output_range=[0, 10])
+        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
 
 if __name__ == "__main__":
     main()

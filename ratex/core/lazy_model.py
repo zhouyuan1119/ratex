@@ -131,3 +131,20 @@ def reduce_gradients(optimizer, groups=None):
                     for p in params:
                         if isinstance(p, torch.Tensor) and p.grad is not None:
                             all_reduce(REDUCE_SUM, [p.grad], scale=1.0 / world_size, groups=groups)
+  
+def dummy(input):
+    """
+        A dummy op to mark layer boundaries. This op does not perform any compute. 
+    """
+    if isinstance(input, torch.Tensor):
+        return _RATEXC._ltc_dummy(input)
+    else:
+        # Must be tuple of tensors or None
+        ret = tuple()
+        for t in input:
+          if t is None:
+            ret = ret + (None,)
+          else:
+            assert isinstance(t, torch.Tensor), 'Each element of the input tuple must be torch.Tensor or None!'
+            ret = ret + (_RATEXC._ltc_dummy(t),)
+        return ret

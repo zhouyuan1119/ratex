@@ -4,10 +4,11 @@
 """ Utilities for PyTorch memory modeling """
 import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
+from ratex.core.lazy_model import dummy
 
 def random_torch_tensor(shape, dtype, range=None):
     """ Simple utility to create a random torch tensor of given type """
-    if dtype == torch.float32:
+    if (dtype == torch.float32) or (dtype == torch.float16) or (dtype == torch.float64):
         assert range is None, 'Float with range not supported!'
         return torch.randn(*shape, dtype=dtype)
     elif dtype == torch.int64:
@@ -84,3 +85,62 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         optimizer.step()
         print("Profiled peak memory for batch {}: {}".format(i, torch.cuda.max_memory_allocated() / (1024*1024)))
     return torch.cuda.max_memory_allocated()
+
+class DummyFunc(torch.autograd.Function):
+    """
+        A function to insert a dummy op into the LTC IR. 
+    """
+
+    @staticmethod
+    def forward(ctx, input):
+        # We don't need to save anything
+        return dummy(input)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        return dummy(grad_output)
+
+class LayerWrapper(torch.nn.Module):
+    """
+        A simple wrapper around a PyTorch NN module. This wrapper will insert one special op after
+        the forward/backward pass of the wrapped module. 
+    """
+    def __init__(self, mod: torch.nn.Module, name: str = None):
+        super(LayerWrapper, self).__init__()
+        self.name_ = name
+        self.mod_ = mod
+        # self.mod_.register_forward_hook(self._forward_hook)
+        # self.mod_.register_full_backward_hook(self._backward_hook)
+        self.dummy = DummyFunc.apply
+
+    def forward(self, *args, **kwargs):
+        res = self.mod_(*args, **kwargs)
+        return self.dummy(res)
+
+    def _forward_hook(self, mod, input, output):
+        print('Forward hook!') 
+        return dummy(output) 
+    
+    def _backward_hook(self, mod, grad_input, grad_output):
+        print('Backward hook!')  
+        return dummy(grad_input)
+
+def wrap_model(model: torch.nn.Module, cur_depth: int = 0, max_depth: int = 1):
+    """
+        Wrap children of the original model with the layer wrapper above.
+
+        Inputs:
+        - model: the original model
+        - cur_depth: current depth, used for recursion
+        - max_depth: this function can operate recursively if depth > 1, where children
+          of children will also be wrapped
+
+        Returns: the wrapped model
+    """
+
+    for name in dir(model):
+        member = getattr(model, name)
+        if isinstance(member, torch.nn.Module):
+            wrapped_member = LayerWrapper(member, name)
+            setattr(model, name, wrapped_member)
+    return model
