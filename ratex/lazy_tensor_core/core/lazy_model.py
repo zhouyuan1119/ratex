@@ -730,6 +730,10 @@ def get_peak_memory():
     """ Get the peak memory of the last graph. """
     return _RATEXC._ltc_get_peak_memory()
 
+def get_memory_breakdown():
+    """ Get the memory braekdown of the last graph. """
+    return _RATEXC._ltc_get_memory_breakdown()
+
 def wait_device_ops(devices=[]):
     """Waits for all the async operations on the given devices to complete.
 

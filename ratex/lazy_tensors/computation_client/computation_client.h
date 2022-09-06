@@ -26,6 +26,20 @@
 
 namespace lazy_tensors {
 
+/*! \brief Struct for storing memory information of each layer. All in MBs. */
+struct LayerMemInfo {
+  /*! \brief Parameter size used in this layer */
+  double param_mbs = 0.0;
+  /*! \brief Peak memory inside this layer during a full execution of the model */
+  double peak_mem_mbs = 0.0;
+  /*! \brief Output activation size of this layer */
+  double outp_act_mbs = 0.0;
+  /*! \brief Total input size needed by this layer */
+  double inp_mbs = 0.0;
+  /*! \brief Peak memory inside this layer if it is executed alone */
+  double peak_mem_isolated_mbs = 0.0;
+};
+
 class GenericComputation {
  public:
   virtual StatusOr<ProgramShape> GetProgramShape() const = 0;
@@ -236,7 +250,8 @@ class ComputationClient {
 
   static ComputationClient* GetIfInitialized();
 
-  virtual double GetPeakMemory() { return 0; }
+  virtual double GetPeakMemory() { return 0.0; }
+  virtual std::vector<LayerMemInfo> GetMemoryBreakDown() { return {}; }
 
  protected:
   // Metrics common to all client interfaces.

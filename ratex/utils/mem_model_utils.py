@@ -53,6 +53,18 @@ def random_torch_tensor(shape, dtype, range=None):
     else:
         raise NotImplementedError
 
+def print_mem_breakdown(mem_breakdown):
+    """
+        Print the memory breakdown. 
+    """
+    print('Analyzed memory breakdown:')
+    for layer_name, info in mem_breakdown.items():
+        print('|-{}:'.format(layer_name))
+        print('  |-fwd: peak {0:6.2f}, param {1:6.2f}, input_act {2:6.2f}, output_act {3:6.2f}, isolated {4:6.2f}'.format(
+          info['fwd']['peak_mem'], info['fwd']['param'], info['fwd']['input_act'], info['fwd']['output_act'], info['fwd']['peak_mem_isolated']))
+        print('  |-bwd: peak {0:6.2f}, param {1:6.2f}, input_act {2:6.2f}, output_act {3:6.2f}, isolated {4:6.2f}'.format(
+          info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
+
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
     """
@@ -95,11 +107,24 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         optimizer.step()
         lm.mark_step()
         peak_mem_batch = lm.get_peak_memory()
-        print('Analyzed peak memory for batch {}: {}'.format(batch, peak_mem_batch))
         peak_mem_mbs = max(peak_mem_mbs, peak_mem_batch)
-        LayerWrapper.executed_layers.clear()
+        if batch != n_batches - 1:
+            LayerWrapper.executed_layers.clear()
     
-    return peak_mem_mbs
+    mem_breakdown = lm.get_memory_breakdown()
+    num_all_info = len(mem_breakdown)
+    breakdown_dict = dict()
+    print(LayerWrapper.executed_layers)
+    for idx, layer_name in enumerate(LayerWrapper.executed_layers):
+        print(idx, layer_name)
+        fwd_info = mem_breakdown[idx]
+        bwd_info = mem_breakdown[num_all_info-idx-1]
+        breakdown_dict[layer_name] = {
+            'fwd': fwd_info,
+            'bwd': bwd_info
+        }
+
+    return peak_mem_mbs, breakdown_dict
 
 def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
@@ -121,8 +146,7 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         loss = loss_fn(outputs, labels)
         loss.backward()
         optimizer.step()
-        print("Profiled peak memory for batch {}: {}".format(i, torch.cuda.max_memory_allocated() / (1024*1024)))
-    return torch.cuda.max_memory_allocated()
+    return torch.cuda.max_memory_allocated() / (1024*1024)
 
 def wrap_model(model: torch.nn.Module, cur_depth: int = 0, max_depth: int = 1):
     """

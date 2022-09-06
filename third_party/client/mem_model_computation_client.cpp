@@ -161,7 +161,8 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
                                          params,
                                          alias,
                                          param_alias,
-                                         use_cnts);
+                                         use_cnts,
+                                         memory_breakdown_);
   peak_memory_ = peak_mem_mbs;
 
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
@@ -264,6 +265,10 @@ bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node,
    * for now. Usually this should suffice. 
    */
 
+  // Special handling of the dummy op
+  if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy)
+    return true;
+
   // Filter out nodes with no inputs (e.g., constant nodes)
   if (node->operands().size() < 1)
     return false;
@@ -314,8 +319,23 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                         const std::vector<const torch_lazy_tensors::ir::Node*>& params,
                         const std::unordered_map<int64_t, int64_t>& alias,
                         const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& param_alias,
-                        const torch_lazy_tensors::ir::OutputMap<int64_t>& use_cnts) {
+                        const torch_lazy_tensors::ir::OutputMap<int64_t>& use_cnts,
+                        std::vector<LayerMemInfo>& memory_breakdown) {
   double curr_mem = 0.0;
+  
+  /* Data structures for tracking memory in each layer */
+
+  // Memory tracker
+  memory_breakdown.clear();
+  LayerMemInfo curr_layer_info;
+  // Set of output tensors (activations)
+  torch_lazy_tensors::ir::OutputSet outputs_in_layer; 
+  // Input parameters and activation sizes
+  torch_lazy_tensors::ir::OutputMap<double> layer_params;
+  torch_lazy_tensors::ir::OutputMap<double> layer_input_act;
+  // Memory consumption at the beginning of a layer (for computing "isolated peak memory" of layer)
+  double mem_at_layer_begin_mbs = 0.0;
+  bool track_layer_begin_mem = true;
 
   // Maintain the current set of live tensors
   torch_lazy_tensors::ir::OutputMap<TensorInfo> live_tensors;
@@ -358,6 +378,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   }
 
   double peak_mem = curr_mem;
+  double layer_peak_mem = curr_mem;
 
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
@@ -393,6 +414,38 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     //   LTC_LOG(INFO) << "|Live tensor: " << t.ToString();
     //   LTC_LOG(INFO) << "|" << info.dump();
     // }
+
+    // Step 1.1: Go through the predecessors of each node for analyzing per-layer parameters and inputs
+    for (auto operand : node->operands()) {
+      LTC_CHECK(live_tensors.count(operand)) << "Predecessor " << operand.ToString() << " is not live!";
+      // Ignore outputs generated in this layer
+      if (outputs_in_layer.count(operand))
+        continue;
+      auto operand_info = live_tensors.at(operand);
+      LTC_CHECK(!operand_info.is_expired) << "Predecessor " << operand.ToString() << " has expired!";
+      // If the operand is a view, use the actual tensor instead
+      auto actual_tensor = operand;
+      double actual_size = operand_info.size_mbs;
+      if (operand_info.is_view) {
+        actual_tensor = operand_info.viewing;
+        LTC_CHECK(live_tensors.count(actual_tensor)) << "Tensor being viewed " << actual_tensor.ToString() << " is not live!";
+        actual_size = live_tensors.at(actual_tensor).size_mbs;
+      }
+      // Insert these operands into their corresponding sets to avoid counting for multiple times
+      if (operand_info.is_param) {
+        layer_params.insert(std::make_pair(actual_tensor, actual_size));
+      } else {
+        layer_input_act.insert(std::make_pair(actual_tensor, actual_size));
+      }
+    }
+    
+    // Step 1.2: Record the memory usage at the beginning of each layer
+    if (track_layer_begin_mem) {
+      mem_at_layer_begin_mbs = curr_mem;
+      track_layer_begin_mem = false;
+      LTC_LOG(INFO) << "Tracking layer begin mem: " << mem_at_layer_begin_mbs;
+    }
+
     // Step 2: Add the output of the current op to the live set and update current memory
     auto outp_sizes = CalculateMemFromShape(node->shape());
     // LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
@@ -440,6 +493,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           )
         );
         live_tensors.at(viewing_tensor).viewers.insert(outp_tensor);
+        outputs_in_layer.insert(outp_tensor);
       } else if (IsInplaceOp(node, live_tensors)) {
         LTC_LOG(INFO) << "|-Inplace op";
         is_inplace = true;
@@ -468,6 +522,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
               TensorInfo(outp_sizes[i], use_cnt, outp_is_param)
             )
           );
+          outputs_in_layer.insert(outp);
           curr_mem += (i == 0) ? 0 : outp_sizes[i];
         }
       } else {
@@ -492,6 +547,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           live_tensors.insert(
             std::make_pair(outp_tensor, TensorInfo(outp_sizes[0], use_cnt, true))
           );
+          outputs_in_layer.insert(outp_tensor);
         } else {
           // No parameter aliasing, add a new entry to live_tensors and increase memory consumption
           for (int i = 0; i < node->num_outputs(); i ++) {
@@ -503,16 +559,59 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                 TensorInfo(outp_sizes[i], use_cnt, false)
               )
             );
+            outputs_in_layer.insert(outp);
             curr_mem += outp_sizes[i];
           }
         }
       }
     }
 
-    // Step 3: Maintain peak memory. The output size of this op has been added, and all tensors that
+    // Step 3: Maintain memory information. The output size of this op has been added, and all tensors that
     // are no longer useful before this op have been freed at this point. 
-    peak_mem = (peak_mem > curr_mem) ? peak_mem : curr_mem;
+    peak_mem = std::max(peak_mem, curr_mem);
+    layer_peak_mem = std::max(layer_peak_mem, curr_mem);
     LTC_LOG(INFO) << "|-Current mem: " << curr_mem << "MBs";
+
+    // Step 3.1: If we see a dummy op, update the memory information of the whole layer over here
+    if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy) {
+      // Peak memory consumption in this layer
+      curr_layer_info.peak_mem_mbs = layer_peak_mem;
+      // Output tensors in this layer
+      for (auto t : outputs_in_layer) {
+        // Only consider tensors that are still live, not expired, not param, not view
+        if (live_tensors.count(t)) {
+          auto t_info = live_tensors.at(t);
+          if (!t_info.is_param && !t_info.is_expired && !t_info.is_view) {
+            curr_layer_info.outp_act_mbs += t_info.size_mbs;
+          }
+        }
+      }
+      outputs_in_layer.clear();
+      // Input tensors, including parameters and activations
+      for (auto p : layer_params) {
+        curr_layer_info.param_mbs += p.second;
+        LTC_LOG(INFO) << "Counting param " << p.first.ToString() << " for " << p.second << " MBs";
+      }
+      for (auto p : layer_input_act) {
+        curr_layer_info.inp_mbs += p.second;
+        LTC_LOG(INFO) << "Counting input act " << p.first.ToString() << " for " << p.second << " MBs";
+      }
+      layer_params.clear();
+      layer_input_act.clear();
+      // "Isolated peak memory"
+      LTC_LOG(INFO) << "input_mbs: " << curr_layer_info.inp_mbs;
+      LTC_LOG(INFO) << "param_mbs: " << curr_layer_info.param_mbs;
+      LTC_LOG(INFO) << "peak_mem: " << layer_peak_mem;
+      LTC_LOG(INFO) << "mem_at_layer_begin_mbs: " << mem_at_layer_begin_mbs;
+      curr_layer_info.peak_mem_isolated_mbs = layer_peak_mem - (mem_at_layer_begin_mbs - curr_layer_info.inp_mbs - curr_layer_info.param_mbs);
+      LTC_LOG(INFO) << "peak_mem_isolated_mbs: " << curr_layer_info.peak_mem_isolated_mbs;
+      mem_at_layer_begin_mbs = 0.0;
+      track_layer_begin_mem = true;
+      // Create a new entry
+      memory_breakdown.push_back(curr_layer_info);
+      curr_layer_info = LayerMemInfo();
+      layer_peak_mem = 0.0;
+    }
 
     // LTC_LOG(INFO) << "Dump live tensors:"; 
     // for (auto tensor_with_info : live_tensors) {

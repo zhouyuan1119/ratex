@@ -20,7 +20,7 @@ from torchvision import datasets, models, transforms
 import time
 import os
 import copy
-from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_training_peak_memory, wrap_model
+from ratex.utils.mem_model_utils import analyze_training_peak_memory, print_mem_breakdown, profile_training_peak_memory, wrap_model
 
 class TorchLeNet(nn.Module):
     def __init__(self, input_shape=28, num_classes=10):
@@ -51,12 +51,14 @@ def main():
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()
-    peak_memory_mbs = analyze_training_peak_memory(
+    peak_memory_ltc, mem_breakdown = analyze_training_peak_memory(
         model_lt, optimizer_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     model_cuda = model_cuda.cuda()
     optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
-    peak_memory_bs = profile_training_peak_memory(
+    peak_memory_profiled = profile_training_peak_memory(
         model_cuda, optimizer, torch.nn.NLLLoss(), (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
-
+    print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
+    print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))
+    print_mem_breakdown(mem_breakdown)
 if __name__ == "__main__":
     main()

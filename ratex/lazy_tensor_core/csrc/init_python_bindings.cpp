@@ -664,6 +664,21 @@ void InitLtcModuleBindings(py::module m) {
   m.def("_ltc_clear_jit_cache", []() { LazyTensor::GetComputationCache()->Clear(); });
   m.def("_ltc_get_peak_memory",
         [] () { return lazy_tensors::ComputationClient::Get()->GetPeakMemory(); });
+  m.def("_ltc_get_memory_breakdown",
+        [] () { 
+    auto mem_breakdown = lazy_tensors::ComputationClient::Get()->GetMemoryBreakDown(); 
+    std::vector<py::dict> result;
+    for (auto info : mem_breakdown) {
+      py::dict info_dict;
+      info_dict["peak_mem"] = info.peak_mem_mbs;
+      info_dict["param"] = info.param_mbs;
+      info_dict["input_act"] = info.inp_mbs;
+      info_dict["output_act"] = info.outp_act_mbs;
+      info_dict["peak_mem_isolated"] = info.peak_mem_isolated_mbs;
+      result.push_back(info_dict);
+    }   
+    return result;
+  });
 }
 
 }  // namespace
