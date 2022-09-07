@@ -4,7 +4,7 @@
 """ Utilities for PyTorch memory modeling """
 import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
-from ratex.core.lazy_model import dummy
+from ratex.core.lazy_model import dummy_fwd, dummy_bwd
 
 class DummyFunc(torch.autograd.Function):
     """
@@ -14,11 +14,11 @@ class DummyFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         # We don't need to save anything
-        return dummy(input)
+        return dummy_fwd(input)
     
     @staticmethod
     def backward(ctx, grad_output):
-        return dummy(grad_output)
+        return dummy_bwd(grad_output)
 
 class LayerWrapper(torch.nn.Module):
     """
@@ -100,6 +100,8 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         marker_tensor = marker_tensor.to(device="lazy")
         optimizer.zero_grad()
         outputs = model(inputs)
+        print('Label shape: ', labels.shape)
+        print('Output shape: ', outputs.shape)
         loss = loss_fn(outputs, labels)
         loss.backward()
         # Insert an additional dummy op here to mark the boundary of the last layer's bwd
