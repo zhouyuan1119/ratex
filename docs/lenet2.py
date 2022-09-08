@@ -46,7 +46,9 @@ class TorchLeNet(nn.Module):
 
 def main():
     model_lt = TorchLeNet()
+    model_lt.train()
     model_cuda = copy.deepcopy(model_lt)
+    model_cuda.train()
     model_lt = wrap_model(model_lt)
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)

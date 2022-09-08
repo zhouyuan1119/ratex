@@ -41,8 +41,10 @@ config = BertConfig(
 
 def main():
     model_lt = BertModelWrapper(config)
+    model_lt.train()
     model_cuda = copy.deepcopy(model_lt)
-    # model_lt = wrap_model(model_lt)
+    model_cuda.train()
+    model_lt = wrap_model(model_lt)
     model_lt = model_lt.to(device="lazy")
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = nn.CrossEntropyLoss()

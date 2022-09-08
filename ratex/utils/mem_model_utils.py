@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """ Utilities for PyTorch memory modeling """
+from typing import Iterable
 import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
-from ratex.core.lazy_model import dummy_fwd, dummy_bwd
+from ratex.core.lazy_model import dummy
 
 class DummyFunc(torch.autograd.Function):
     """
@@ -14,11 +15,11 @@ class DummyFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         # We don't need to save anything
-        return dummy_fwd(input)
+        return dummy(input)
     
     @staticmethod
     def backward(ctx, grad_output):
-        return dummy_bwd(grad_output)
+        return dummy(grad_output)
 
 class LayerWrapper(torch.nn.Module):
     """
@@ -38,7 +39,14 @@ class LayerWrapper(torch.nn.Module):
     def forward(self, *args, **kwargs):
         res = self.mod_(*args, **kwargs)
         LayerWrapper.executed_layers.append(self.name_)
-        return self.dummy(res)
+        # Custom autograd function must take a single tensor as input
+        # https://github.com/pytorch/pytorch/issues/55509#issuecomment-815160271
+        if isinstance(res, torch.Tensor):
+            ret = self.dummy(res)
+        else:
+            assert isinstance(res, Iterable), "Result must be single tensor or iterable!"
+            ret = tuple(self.dummy(elm) if isinstance(elm, torch.Tensor) else elm for elm in res)
+        return ret
 
 def random_torch_tensor(shape, dtype, range=None):
     """ Simple utility to create a random torch tensor of given type """
@@ -91,6 +99,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
 
     peak_mem_mbs = -float('inf')
     for batch in range(n_batches):
+        print('Start batch {}!'.format(batch))
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.to(device="lazy")
@@ -100,14 +109,14 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         marker_tensor = marker_tensor.to(device="lazy")
         optimizer.zero_grad()
         outputs = model(inputs)
-        print('Label shape: ', labels.shape)
-        print('Output shape: ', outputs.shape)
         loss = loss_fn(outputs, labels)
+        print('Bwd... ')
         loss.backward()
         # Insert an additional dummy op here to mark the boundary of the last layer's bwd
         _ = DummyFunc.apply(marker_tensor)
         optimizer.step()
         lm.mark_step()
+        print('Done batch {}!'.format(batch))
         peak_mem_batch = lm.get_peak_memory()
         peak_mem_mbs = max(peak_mem_mbs, peak_mem_batch)
         if batch != n_batches - 1:

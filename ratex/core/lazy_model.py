@@ -133,34 +133,10 @@ def reduce_gradients(optimizer, groups=None):
                         if isinstance(p, torch.Tensor) and p.grad is not None:
                             all_reduce(REDUCE_SUM, [p.grad], scale=1.0 / world_size, groups=groups)
   
-def dummy(input, requires_grad=False):
+def dummy(input):
     """
         A dummy op to mark layer boundaries. This op does not perform any compute. 
-        Input can be a tuple, list, or a single tensor. For each element in the input,
-        if it is a tensor, then it goes through the LTC dummy operator. Otherwise it is
-        returned as is. 
+        Input must be a single tensor.  
     """
-    input_is_iterable = True
-    if not (isinstance(input, list) or isinstance(input, tuple)):
-        assert isinstance(input, torch.Tensor), "Only lists, tuples, and single torch tensor are allowed!"
-        input_is_iterable = False
-        input = [input]
-    
-    ret = []
-    for elm in input:
-        if isinstance(elm, torch.Tensor):
-            ret.append(_RATEXC._ltc_dummy(elm))
-            if requires_grad:
-              ret[-1].requires_grad = True
-        else:
-            ret.append(elm)
-    if len(ret) == 1 and not input_is_iterable:
-      ret = ret[0]
-    return ret
-
-
-def dummy_fwd(input):
-  return dummy(input, requires_grad=True)
-
-def dummy_bwd(input):
-  return dummy(input)
+    assert isinstance(input, torch.Tensor), "Input to the dummy op must be a torch Tensor!"
+    return _RATEXC._ltc_dummy(input)

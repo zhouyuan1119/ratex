@@ -510,7 +510,8 @@ void InitLtcModuleBindings(py::module m) {
           return new_token;
         });
   m.def("_ltc_dummy", [](const at::Tensor& input) {
-    return Dummy(input);
+    auto result = Dummy(input);
+    return torch::autograd::make_variable(result, /*requires_grad=*/input.requires_grad());
   });
   m.def("_ltc_all_reduce", [](const std::string& reduce_type, const at::Tensor& input,
                               const std::shared_ptr<ir::Value>& token, double scale,
