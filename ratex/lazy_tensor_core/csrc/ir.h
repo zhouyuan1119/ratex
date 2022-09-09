@@ -38,6 +38,11 @@ struct UserMetaData {
   }
 };
 
+// Our metadata for identifying layer boundaries
+struct LayerBoundaryMetaData: public UserMetaData {
+  bool is_layer_boundary = true;
+};
+
 struct MetaData {
   std::string scope;
   std::vector<SourceLocation> frame_info;

@@ -312,7 +312,12 @@ ViewInfo CreateAsStridedViewInfo(const lazy_tensors::Shape& input_shape, std::ve
 //////////////////////////////////////////////////////////////////////////////
 
 LazyTensor LazyTensor::dummy(const LazyTensor& input) {
-  return input.CreateFrom(ir::Value(ir::MakeNode<ir::ops::Dummy>(input.GetIrValue()), 0));
+  auto input_value = input.GetIrValue();
+  auto input_node = input_value.node;
+  std::shared_ptr<ir::UserMetaData> metadata_ptr = std::make_shared<ir::LayerBoundaryMetaData>();
+  input_node->SetUserMetadata(metadata_ptr);
+  LTC_LOG(INFO) << "Set user metadata for " << input_node->ToString();
+  return input.CreateFrom(input_value);
 }
 
 std::pair<LazyTensor, ir::Value> LazyTensor::all_reduce(const LazyTensor& input,

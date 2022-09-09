@@ -114,9 +114,7 @@ std::vector<Literal> MemModelComputationClient::TransferFromServer(
 
 ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     ComputationClient::CompileInstance instance) {
-  // LTC_LOG(INFO) << "In MemModelComputationClient::Compile";
   auto* computation = static_cast<GenericComputationMemModel*>(instance.computation.get());
-  // LTC_LOG(INFO) << "Got computation!";
 
   auto post_order_nodes = computation->GetPostOrderNodes();
   auto alias = computation->GetAlias();
@@ -141,7 +139,8 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
     auto second_idx = p.second;
     LTC_LOG(INFO) << "|-Param " << node->ToString() << " <->  param " << params[second_idx]->ToString();
   }
-  // LTC_LOG(INFO) << "Got info!";
+
+  // ReplaceUseWithDummy(post_order_nodes);
 
   // Walk the graph and get the use count of each node. 
   // We cannot leverage the use count in lazy tensor IR because over there the
@@ -266,8 +265,8 @@ bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node,
    */
 
   // Special handling of the dummy op
-  if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy)
-    return true;
+  // if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy)
+  //   return true;
 
   // Filter out nodes with no inputs (e.g., constant nodes)
   if (node->operands().size() < 1)
@@ -572,8 +571,10 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     layer_peak_mem = std::max(layer_peak_mem, curr_mem);
     LTC_LOG(INFO) << "|-Current mem: " << curr_mem << "MBs";
 
-    // Step 3.1: If we see a dummy op, update the memory information of the whole layer over here
-    if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy) {
+    // Step 3.1: At layer boundaries, update the memory information of the whole layer over here
+    auto metadata = dynamic_cast<torch_lazy_tensors::ir::LayerBoundaryMetaData*>(node->user_metadata());
+    if (metadata != nullptr) {
+      LTC_LOG(INFO) << "Valid user metadata for node " << node->ToString();
       // Peak memory consumption in this layer
       curr_layer_info.peak_mem_mbs = layer_peak_mem;
       // Output tensors in this layer
@@ -669,4 +670,19 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   LTC_LOG(INFO) << "Peak memory: " << peak_mem << "MBs";
   return peak_mem;
 }
+
+// void ReplaceUseWithDummy(const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes) {
+//   for (auto node : topo_sorted_nodes) {
+//     if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy) {
+//       auto input_node = node->operand(0).node;
+//       auto all_uses = input_node->uses();
+//       for (auto use : all_uses) {
+//         auto use_node = use.node;
+//         if (use_node != node) {
+//           use_node->ReplaceOperand(use.operand_index, s_ptr, 0);
+//         }
+//       } 
+//     }
+//   }
+// }
 }

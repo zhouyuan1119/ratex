@@ -23,17 +23,17 @@ class BertModelWrapper(nn.Module):
     def __init__(self, config):
         super(BertModelWrapper, self).__init__()
         self.num_labels = config.num_labels
-        self.bert = BertForSequenceClassification(config)
+        self.berta = BertForSequenceClassification(config)
     
     def forward(self, x, **kwargs):
-        res = self.bert(x, return_dict=False, **kwargs)[0].view(-1, self.num_labels)
+        res = self.berta(x, return_dict=False, **kwargs)[0].view(-1, self.num_labels)
         return res
 
 
 config = BertConfig(
     vocab_size=30522,
     hidden_size=768,
-    num_hidden_layers=2,
+    num_hidden_layers=12,
     num_attention_heads=12,
     intermediate_size=3072,
     hidden_act="relu",
@@ -44,7 +44,7 @@ def main():
     model_lt.train()
     model_cuda = copy.deepcopy(model_lt)
     model_cuda.train()
-    model_lt = wrap_model(model_lt)
+    model_lt = wrap_model(model_lt, 'top', max_depth=4)
     model_lt = model_lt.to(device="lazy")
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = nn.CrossEntropyLoss()

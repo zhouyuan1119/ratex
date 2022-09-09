@@ -49,7 +49,7 @@ def main():
     model_lt.train()
     model_cuda = copy.deepcopy(model_lt)
     model_cuda.train()
-    model_lt = wrap_model(model_lt)
+    model_lt = wrap_model(model_lt, 'top')
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()

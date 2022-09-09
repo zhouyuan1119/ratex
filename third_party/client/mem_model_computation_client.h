@@ -211,4 +211,16 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
                         const torch_lazy_tensors::ir::OutputMap<int64_t>& use_cnts,
                         std::vector<LayerMemInfo>& memory_breakdown);
 
+/*!
+ * \brief We insert dummy nodes into lazy tensor IR to mark layer boundaries. These dummy operators are 
+ * literally just straight-throughs, like the following:
+ *    %286 = tanh(...)
+ *    %287 = dummy(%286) # %287 is the same as %286
+ * However, lazy tensor cannot guarantee to replace all future uses of %286 with %287 in this case, 
+ * especially in backward. As a result we need an additional pass on the IR nodes to do this job. 
+ * \param topo_sorted_nodes List of operators in the program, sorted in topological order. 
+ * \return None, modifies topo_sorted_nodes in-place. 
+ */
+// void ReplaceUseWithDummy(const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes);
+
 }

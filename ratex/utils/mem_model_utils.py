@@ -109,8 +109,8 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         marker_tensor = marker_tensor.to(device="lazy")
         optimizer.zero_grad()
         outputs = model(inputs)
+        print('Executed layers: ', LayerWrapper.executed_layers)
         loss = loss_fn(outputs, labels)
-        print('Bwd... ')
         loss.backward()
         # Insert an additional dummy op here to mark the boundary of the last layer's bwd
         _ = DummyFunc.apply(marker_tensor)
@@ -125,7 +125,6 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     mem_breakdown = lm.get_memory_breakdown()
     num_all_info = len(mem_breakdown)
     breakdown_dict = dict()
-    print(LayerWrapper.executed_layers)
     for idx, layer_name in enumerate(LayerWrapper.executed_layers):
         print(idx, layer_name)
         fwd_info = mem_breakdown[idx]
@@ -149,7 +148,6 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.cuda()
-        # inputs.requires_grad = True
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.cuda()  # One-hot
         optimizer.zero_grad()
@@ -159,22 +157,46 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         optimizer.step()
     return torch.cuda.max_memory_allocated() / (1024*1024)
 
-def wrap_model(model: torch.nn.Module, cur_depth: int = 0, max_depth: int = 1):
+def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth: int = 1):
     """
         Wrap children of the original model with the layer wrapper above.
 
         Inputs:
         - model: the original model
+        - name: the name of the model (layer)
         - cur_depth: current depth, used for recursion
         - max_depth: this function can operate recursively if depth > 1, where children
           of children will also be wrapped
 
         Returns: the wrapped model
     """
+    # Base case: when reaching max depth, don't go inside and wrap the layer as a whole
+    if cur_depth >= max_depth:
+        return LayerWrapper(model, name)
 
-    for name in dir(model):
-        member = getattr(model, name)
-        if isinstance(member, torch.nn.Module):
-            wrapped_member = LayerWrapper(member, name)
-            setattr(model, name, wrapped_member)
+    for layer_name in dir(model):
+        # Skip properties
+        try:
+            member_from_type = getattr(type(model), layer_name)
+        except Exception:
+            member_from_type = None
+        if isinstance(member_from_type, property):
+            continue
+
+        member = getattr(model, layer_name)
+        # For PyTorch module list, wrap each element instead. 
+        # We consider this as going in one more layer. 
+        if isinstance(member, torch.nn.ModuleList):
+            new_elms = []
+            for idx, elm in enumerate(member):
+                if isinstance(elm, torch.nn.Module):
+                    elm_name = layer_name + '_{}'.format(idx)
+                    wrapped_elm = wrap_model(elm, elm_name, cur_depth+1, max_depth)
+                    new_elms.append(wrapped_elm)
+                    print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, elm_name))
+            setattr(model, layer_name, torch.nn.ModuleList(new_elms))
+        elif isinstance(member, torch.nn.Module):
+            wrapped_member = wrap_model(member, layer_name, cur_depth+1, max_depth)
+            setattr(model, layer_name, wrapped_member)
+            print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, layer_name))
     return model
