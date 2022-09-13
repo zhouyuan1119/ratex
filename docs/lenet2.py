@@ -40,7 +40,9 @@ class TorchLeNet(nn.Module):
         out = F.avg_pool2d(out, (2, 2), (2, 2))
         out = torch.flatten(out, 1)  # pylint: disable=no-member
         out = self.linear1(out)
+        out = torch.relu(out)  # pylint: disable=no-member
         out = self.linear2(out)
+        out = torch.relu(out)  # pylint: disable=no-member
         out = self.linear3(out)
         return out
 

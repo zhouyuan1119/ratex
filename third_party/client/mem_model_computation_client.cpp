@@ -332,9 +332,6 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   // Input parameters and activation sizes
   torch_lazy_tensors::ir::OutputMap<double> layer_params;
   torch_lazy_tensors::ir::OutputMap<double> layer_input_act;
-  // Memory consumption at the beginning of a layer (for computing "isolated peak memory" of layer)
-  double mem_at_layer_begin_mbs = 0.0;
-  bool track_layer_begin_mem = true;
 
   // Maintain the current set of live tensors
   torch_lazy_tensors::ir::OutputMap<TensorInfo> live_tensors;
@@ -438,13 +435,6 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       }
     }
     
-    // Step 1.2: Record the memory usage at the beginning of each layer
-    if (track_layer_begin_mem) {
-      mem_at_layer_begin_mbs = curr_mem;
-      track_layer_begin_mem = false;
-      LTC_LOG(INFO) << "Tracking layer begin mem: " << mem_at_layer_begin_mbs;
-    }
-
     // Step 2: Add the output of the current op to the live set and update current memory
     auto outp_sizes = CalculateMemFromShape(node->shape());
     // LTC_CHECK(use_cnts.count(node)) << "Node " << node->ToString() << " does not have use count!";
@@ -584,10 +574,10 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           auto t_info = live_tensors.at(t);
           if (!t_info.is_param && !t_info.is_expired && !t_info.is_view) {
             curr_layer_info.outp_act_mbs += t_info.size_mbs;
+            LTC_LOG(INFO) << "Counting output act " << t.ToString() << " for " << t_info.size_mbs << " MBs";
           }
         }
       }
-      outputs_in_layer.clear();
       // Input tensors, including parameters and activations
       for (auto p : layer_params) {
         curr_layer_info.param_mbs += p.second;
@@ -597,17 +587,34 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         curr_layer_info.inp_mbs += p.second;
         LTC_LOG(INFO) << "Counting input act " << p.first.ToString() << " for " << p.second << " MBs";
       }
-      layer_params.clear();
-      layer_input_act.clear();
-      // "Isolated peak memory"
+      // "Isolated peak memory", this is basically the peak memory inside this layer, minus the size
+      // of live tensors that are untouched in this layer. "Untouched" means:
+      // 1. It is not generated in this layer (i.e., not in outputs_in_layers)
+      // 2. It is not used by this layer (i.e., not in layer_params or layer_input_act)
+      // 3. For in-place updates and views: any tensor that is in-place updated or viewed inside the 
+      //    layer will appear in either layer_params or layer_input_act, thus are already considered
+      // 4. If the tensor is expired or is a view, we don't decrement its size
+      curr_layer_info.peak_mem_isolated_mbs = layer_peak_mem;
+      for (auto p : live_tensors) {
+        auto output = p.first;
+        auto t_info = p.second;
+        if (!outputs_in_layer.count(output) && !layer_input_act.count(output) && 
+            !layer_params.count(output) && !t_info.is_expired && !t_info.is_view) {
+          curr_layer_info.peak_mem_isolated_mbs -= p.second.size_mbs;
+          LTC_LOG(INFO) << "Purge tensor " << output.ToString() << " because it is untouched!";
+        }
+      }
+      // LTC_LOG(INFO) << "mem_at_layer_begin_mbs: " << mem_at_layer_begin_mbs;
+      // curr_layer_info.peak_mem_isolated_mbs = layer_peak_mem - 
+      //   (mem_at_layer_begin_mbs - curr_layer_info.inp_mbs - curr_layer_info.param_mbs);
       LTC_LOG(INFO) << "input_mbs: " << curr_layer_info.inp_mbs;
       LTC_LOG(INFO) << "param_mbs: " << curr_layer_info.param_mbs;
+      LTC_LOG(INFO) << "output_mbs: " << curr_layer_info.outp_act_mbs;
       LTC_LOG(INFO) << "peak_mem: " << layer_peak_mem;
-      LTC_LOG(INFO) << "mem_at_layer_begin_mbs: " << mem_at_layer_begin_mbs;
-      curr_layer_info.peak_mem_isolated_mbs = layer_peak_mem - (mem_at_layer_begin_mbs - curr_layer_info.inp_mbs - curr_layer_info.param_mbs);
       LTC_LOG(INFO) << "peak_mem_isolated_mbs: " << curr_layer_info.peak_mem_isolated_mbs;
-      mem_at_layer_begin_mbs = 0.0;
-      track_layer_begin_mem = true;
+      outputs_in_layer.clear();
+      layer_params.clear();
+      layer_input_act.clear();
       // Create a new entry
       memory_breakdown.push_back(curr_layer_info);
       curr_layer_info = LayerMemInfo();

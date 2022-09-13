@@ -68,9 +68,9 @@ def print_mem_breakdown(mem_breakdown):
     print('Analyzed memory breakdown:')
     for layer_name, info in mem_breakdown.items():
         print('|-{}:'.format(layer_name))
-        print('  |-fwd: peak {0:6.2f}, param {1:6.2f}, input_act {2:6.2f}, output_act {3:6.2f}, isolated {4:6.2f}'.format(
+        print('  |-fwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
           info['fwd']['peak_mem'], info['fwd']['param'], info['fwd']['input_act'], info['fwd']['output_act'], info['fwd']['peak_mem_isolated']))
-        print('  |-bwd: peak {0:6.2f}, param {1:6.2f}, input_act {2:6.2f}, output_act {3:6.2f}, isolated {4:6.2f}'.format(
+        print('  |-bwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
           info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
 
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
@@ -105,14 +105,14 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         inputs = inputs.to(device="lazy")
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.to(device="lazy")  # One-hot
-        marker_tensor = random_torch_tensor((1,), torch.float32)
-        marker_tensor = marker_tensor.to(device="lazy")
         optimizer.zero_grad()
         outputs = model(inputs)
         print('Executed layers: ', LayerWrapper.executed_layers)
         loss = loss_fn(outputs, labels)
         loss.backward()
         # Insert an additional dummy op here to mark the boundary of the last layer's bwd
+        marker_tensor = random_torch_tensor((1,), torch.float32)
+        marker_tensor = marker_tensor.to(device="lazy")
         _ = DummyFunc.apply(marker_tensor)
         optimizer.step()
         lm.mark_step()
@@ -124,6 +124,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     
     mem_breakdown = lm.get_memory_breakdown()
     num_all_info = len(mem_breakdown)
+    print('num_all_info = ', num_all_info)
     breakdown_dict = dict()
     for idx, layer_name in enumerate(LayerWrapper.executed_layers):
         print(idx, layer_name)
@@ -174,6 +175,7 @@ def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth:
     if cur_depth >= max_depth:
         return LayerWrapper(model, name)
 
+    has_valid_children = False
     for layer_name in dir(model):
         # Skip properties
         try:
@@ -187,6 +189,7 @@ def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth:
         # For PyTorch module list, wrap each element instead. 
         # We consider this as going in one more layer. 
         if isinstance(member, torch.nn.ModuleList):
+            has_valid_children = True
             new_elms = []
             for idx, elm in enumerate(member):
                 if isinstance(elm, torch.nn.Module):
@@ -196,7 +199,8 @@ def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth:
                     print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, elm_name))
             setattr(model, layer_name, torch.nn.ModuleList(new_elms))
         elif isinstance(member, torch.nn.Module):
+            has_valid_children = True
             wrapped_member = wrap_model(member, layer_name, cur_depth+1, max_depth)
             setattr(model, layer_name, wrapped_member)
             print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, layer_name))
-    return model
+    return model if has_valid_children else LayerWrapper(model, name)

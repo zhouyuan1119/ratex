@@ -239,6 +239,9 @@ std::string DumpUtil::PostOrderToText(lazy_tensors::Span<const Node* const> post
       ss << ", ROOT=" << *opt_root_id;
     }
     ss << ", id = " << node->id();
+    if (node->user_metadata() != nullptr) {
+      ss << ", is_layer_boundary";
+    }
     if (node->metadata().frame_info.size() > 0) {
       ss << ", " << node->metadata().frame_info[0];
     } else {
