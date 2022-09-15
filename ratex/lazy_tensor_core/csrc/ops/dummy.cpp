@@ -14,18 +14,18 @@ namespace torch_lazy_tensors {
 namespace ir {
 namespace ops {
 
-Dummy::Dummy(const Value& input)
-    : Node(ltc_dummy, {input}) {
+Dummy::Dummy(const Value& input, const std::string& name)
+    : Node(ltc_dummy, {input}), name_(name) {
   SetShapeDeferred([&]() { return compiler::NodeLowering::Get()->Infer(this); });
 }
 
 NodePtr Dummy::Clone(OpList operands) const {
-  return MakeNode<Dummy>(operands.at(0));
+  return MakeNode<Dummy>(operands.at(0), name_);
 }
 
 std::string Dummy::ToString() const {
   std::stringstream ss;
-  ss << Node::ToString();
+  ss << Node::ToString() << ", name = " << name_;
   return ss.str();
 }
 

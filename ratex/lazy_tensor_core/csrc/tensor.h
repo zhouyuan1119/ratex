@@ -204,7 +204,8 @@ class LazyTensor {
   //////////////////////////////////////////////////////////////////////////////
   // Special operators follows here, listed in alphabetical order.
   //////////////////////////////////////////////////////////////////////////////
-  static LazyTensor dummy(const LazyTensor& input);
+  static LazyTensor dummy(const LazyTensor& input, const std::string& name);
+  static LazyTensor dummy_bwd(const LazyTensor& input, const std::string& name);
 
   static std::pair<LazyTensor, ir::Value> all_reduce(const LazyTensor& input,
                                                      const ir::Value& token,

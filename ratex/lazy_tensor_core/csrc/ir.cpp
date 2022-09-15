@@ -249,7 +249,7 @@ std::string Node::ToString() const {
   EmitShortFrameInfo(ss, metadata_.frame_info);
   ss << ", id = " << id_;
   if (user_metadata_ != nullptr) {
-    ss << ", is_layer_boundary=" << std::static_pointer_cast<LayerBoundaryMetaData>(user_metadata_)->is_layer_boundary;
+    ss << ", is_layer_boundary=" << std::static_pointer_cast<LayerBoundaryMetaData>(user_metadata_)->name;
   }
   return ss.str();
 }

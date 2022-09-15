@@ -133,10 +133,19 @@ def reduce_gradients(optimizer, groups=None):
                         if isinstance(p, torch.Tensor) and p.grad is not None:
                             all_reduce(REDUCE_SUM, [p.grad], scale=1.0 / world_size, groups=groups)
   
-def dummy(input):
+def dummy(input, name):
     """
-        A dummy op to mark layer boundaries. This op does not perform any compute. 
-        Input must be a single tensor.  
+        A dummy op to mark layer boundaries. This op does not perform any compute or generate any
+        additional IR node. It only marks the input IR node with custom metadata. Input must be a 
+        single tensor.  
     """
     assert isinstance(input, torch.Tensor), "Input to the dummy op must be a torch Tensor!"
-    return _RATEXC._ltc_dummy(input)
+    return _RATEXC._ltc_dummy(input, name)
+
+def dummy_bwd(input, name):
+    """
+        A dummy op to mark layer boundaries. This op is basically a straight-through and does not
+        perform any compute. Input must be a single tensor.  
+    """
+    assert isinstance(input, torch.Tensor), "Input to the dummy op must be a torch Tensor!"
+    return _RATEXC._ltc_dummy_bwd(input, name+'.bwd')

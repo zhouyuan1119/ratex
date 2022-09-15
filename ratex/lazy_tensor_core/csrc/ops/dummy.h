@@ -15,12 +15,16 @@ namespace ops {
 
 class Dummy : public Node {
  public:
-  Dummy(const Value& input);
+  Dummy(const Value& input, const std::string& name);
 
   NodePtr Clone(OpList operands) const override;
 
   std::string ToString() const override;
 
+  std::string name() { return name_; }
+
+ private:
+  std::string name_;
 };
 
 }  // namespace ops

@@ -173,8 +173,13 @@ std::shared_ptr<ir::Value> AllReduceInPlace(
       LazyTensor::all_reduce(&xtensors, *token, GetReduceType(reduce_type), scale, replica_groups));
 }
 
-at::Tensor Dummy(const at::Tensor& input) {
-  LazyTensor result = LazyTensor::dummy(bridge::GetLtcTensor(input));
+at::Tensor Dummy(const at::Tensor& input, const std::string& name) {
+  LazyTensor result = LazyTensor::dummy(bridge::GetLtcTensor(input), name);
+  return bridge::AtenFromLtcTensor(std::move(result));
+}
+
+at::Tensor DummyBwd(const at::Tensor& input, const std::string& name) {
+  LazyTensor result = LazyTensor::dummy_bwd(bridge::GetLtcTensor(input), name);
   return bridge::AtenFromLtcTensor(std::move(result));
 }
 
@@ -509,8 +514,12 @@ void InitLtcModuleBindings(py::module m) {
           }
           return new_token;
         });
-  m.def("_ltc_dummy", [](const at::Tensor& input) {
-    auto result = Dummy(input);
+  m.def("_ltc_dummy", [](const at::Tensor& input, const std::string& name) {
+    auto result = Dummy(input, name);
+    return torch::autograd::make_variable(result, /*requires_grad=*/input.requires_grad());
+  });
+  m.def("_ltc_dummy_bwd", [](const at::Tensor& input, const std::string& name) {
+    auto result = DummyBwd(input, name);
     return torch::autograd::make_variable(result, /*requires_grad=*/input.requires_grad());
   });
   m.def("_ltc_all_reduce", [](const std::string& reduce_type, const at::Tensor& input,
@@ -669,8 +678,11 @@ void InitLtcModuleBindings(py::module m) {
         [] () { 
     auto mem_breakdown = lazy_tensors::ComputationClient::Get()->GetMemoryBreakDown(); 
     std::vector<py::dict> result;
-    for (auto info : mem_breakdown) {
+    for (auto pair : mem_breakdown) {
+      auto name = pair.first;
+      auto info = pair.second;
       py::dict info_dict;
+      info_dict["name"] = name;
       info_dict["peak_mem"] = info.peak_mem_mbs;
       info_dict["param"] = info.param_mbs;
       info_dict["input_act"] = info.inp_mbs;

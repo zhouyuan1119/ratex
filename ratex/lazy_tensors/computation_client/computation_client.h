@@ -251,7 +251,7 @@ class ComputationClient {
   static ComputationClient* GetIfInitialized();
 
   virtual double GetPeakMemory() { return 0.0; }
-  virtual std::vector<LayerMemInfo> GetMemoryBreakDown() { return {}; }
+  virtual std::unordered_map<std::string, LayerMemInfo> GetMemoryBreakDown() { return {}; }
 
  protected:
   // Metrics common to all client interfaces.

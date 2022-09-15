@@ -40,7 +40,8 @@ struct UserMetaData {
 
 // Our metadata for identifying layer boundaries
 struct LayerBoundaryMetaData: public UserMetaData {
-  bool is_layer_boundary = true;
+  LayerBoundaryMetaData(const std::string& layer_name) : name(layer_name) {}
+  std::string name;
 };
 
 struct MetaData {

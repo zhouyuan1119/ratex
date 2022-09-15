@@ -5,7 +5,8 @@
 from typing import Iterable
 import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
-from ratex.core.lazy_model import dummy
+from ratex.core.lazy_model import dummy, dummy_bwd
+import time
 
 class DummyFunc(torch.autograd.Function):
     """
@@ -15,11 +16,30 @@ class DummyFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         # We don't need to save anything
-        return dummy(input)
+        return dummy(input, "marker")
     
     @staticmethod
     def backward(ctx, grad_output):
         return dummy(grad_output)
+
+def run_dummy_fwd(mod, input, output):
+    if isinstance(output, torch.Tensor):
+        dummy(output, mod.name_)
+    else:
+        assert isinstance(output, Iterable), "Result must be single tensor or iterable!"
+        assert all(isinstance(elm, torch.Tensor) for elm in output), "All fields of the output iterable must be tensors!"
+        dummy(output[-1], mod.name_)
+
+def run_dummy_bwd(mod, grad_input, grad_output):
+    new_grad_input = []
+    dummy_added = False
+    for elm in grad_input:
+        if isinstance(elm, torch.Tensor) and not dummy_added:
+            new_grad_input.append(dummy_bwd(elm, mod.name_))
+            dummy_added = True
+        else:
+            new_grad_input.append(elm)
+    return tuple(new_grad_input)
 
 class LayerWrapper(torch.nn.Module):
     """
@@ -34,19 +54,20 @@ class LayerWrapper(torch.nn.Module):
         super(LayerWrapper, self).__init__()
         self.name_ = name
         self.mod_ = mod
-        self.dummy = DummyFunc.apply
+        self.register_forward_hook(run_dummy_fwd)
+        self.register_full_backward_hook(run_dummy_bwd)
 
     def forward(self, *args, **kwargs):
         res = self.mod_(*args, **kwargs)
         LayerWrapper.executed_layers.append(self.name_)
         # Custom autograd function must take a single tensor as input
         # https://github.com/pytorch/pytorch/issues/55509#issuecomment-815160271
-        if isinstance(res, torch.Tensor):
-            ret = self.dummy(res)
-        else:
-            assert isinstance(res, Iterable), "Result must be single tensor or iterable!"
-            ret = tuple(self.dummy(elm) if isinstance(elm, torch.Tensor) else elm for elm in res)
-        return ret
+        # if isinstance(res, torch.Tensor):
+        #     ret = self.dummy(res)
+        # else:
+        #     assert isinstance(res, Iterable), "Result must be single tensor or iterable!"
+        #     ret = tuple(self.dummy(elm) if isinstance(elm, torch.Tensor) else elm for elm in res)
+        return res
 
 def random_torch_tensor(shape, dtype, range=None):
     """ Simple utility to create a random torch tensor of given type """
@@ -68,10 +89,12 @@ def print_mem_breakdown(mem_breakdown):
     print('Analyzed memory breakdown:')
     for layer_name, info in mem_breakdown.items():
         print('|-{}:'.format(layer_name))
-        print('  |-fwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
-          info['fwd']['peak_mem'], info['fwd']['param'], info['fwd']['input_act'], info['fwd']['output_act'], info['fwd']['peak_mem_isolated']))
-        print('  |-bwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
-          info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
+        if 'fwd' in info:
+            print('  |-fwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
+                info['fwd']['peak_mem'], info['fwd']['param'], info['fwd']['input_act'], info['fwd']['output_act'], info['fwd']['peak_mem_isolated']))
+        if 'bwd' in info:
+            print('  |-bwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
+                info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
 
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
@@ -93,7 +116,8 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     Returns:
         peak_mem_mbs: Peak memory consumption in MBs. 
     """
-    
+
+    start = time.time() 
     for _, p in model.named_parameters():
         assert p.device.type == 'lazy', 'The model is not on the lazy device, please run model.to(device="lazy") first. '
 
@@ -107,13 +131,13 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         labels = labels.to(device="lazy")  # One-hot
         optimizer.zero_grad()
         outputs = model(inputs)
-        print('Executed layers: ', LayerWrapper.executed_layers)
+        print('Executed layers in fwd: ', LayerWrapper.executed_layers)
         loss = loss_fn(outputs, labels)
         loss.backward()
         # Insert an additional dummy op here to mark the boundary of the last layer's bwd
         marker_tensor = random_torch_tensor((1,), torch.float32)
         marker_tensor = marker_tensor.to(device="lazy")
-        _ = DummyFunc.apply(marker_tensor)
+        _ = dummy(marker_tensor, LayerWrapper.executed_layers[0] + '.bwd')
         optimizer.step()
         lm.mark_step()
         print('Done batch {}!'.format(batch))
@@ -121,20 +145,27 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         peak_mem_mbs = max(peak_mem_mbs, peak_mem_batch)
         if batch != n_batches - 1:
             LayerWrapper.executed_layers.clear()
-    
+     
     mem_breakdown = lm.get_memory_breakdown()
-    num_all_info = len(mem_breakdown)
-    print('num_all_info = ', num_all_info)
     breakdown_dict = dict()
-    for idx, layer_name in enumerate(LayerWrapper.executed_layers):
-        print(idx, layer_name)
-        fwd_info = mem_breakdown[idx]
-        bwd_info = mem_breakdown[num_all_info-idx-1]
-        breakdown_dict[layer_name] = {
-            'fwd': fwd_info,
-            'bwd': bwd_info
-        }
+    for info in mem_breakdown:
+        name = info['name']
+        if not name.endswith('.bwd'):
+            if name in breakdown_dict:
+                breakdown_dict[name]['fwd'] = info
+            else:
+                breakdown_dict[name] = dict()
+                breakdown_dict[name]['fwd'] = info
+        else:
+            assert name.endswith('.bwd'), "Unexpected layer name: {}".format(name)
+            if name[:-4] in breakdown_dict:
+                breakdown_dict[name[:-4]]['bwd'] = info
+            else:
+                breakdown_dict[name[:-4]] = dict()
+                breakdown_dict[name[:-4]]['bwd'] = info
 
+    end = time.time()
+    print('Memory model elapsed time: ', end - start)
     return peak_mem_mbs, breakdown_dict
 
 def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
@@ -193,14 +224,14 @@ def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth:
             new_elms = []
             for idx, elm in enumerate(member):
                 if isinstance(elm, torch.nn.Module):
-                    elm_name = layer_name + '_{}'.format(idx)
+                    elm_name = name + '.' + layer_name + '_{}'.format(idx)
                     wrapped_elm = wrap_model(elm, elm_name, cur_depth+1, max_depth)
                     new_elms.append(wrapped_elm)
                     print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, elm_name))
             setattr(model, layer_name, torch.nn.ModuleList(new_elms))
         elif isinstance(member, torch.nn.Module):
             has_valid_children = True
-            wrapped_member = wrap_model(member, layer_name, cur_depth+1, max_depth)
+            wrapped_member = wrap_model(member, name + '.' + layer_name, cur_depth+1, max_depth)
             setattr(model, layer_name, wrapped_member)
             print('[wrap_model] Depth {}: wrap {}'.format(cur_depth, layer_name))
     return model if has_valid_children else LayerWrapper(model, name)

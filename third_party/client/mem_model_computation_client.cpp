@@ -9,7 +9,6 @@
 #include <iostream>
 
 #include "ratex/csrc/compiler/utils.h"
-#include "ratex/csrc/compiler/mem_model_lowering_context.h"
 #include "ratex/csrc/value_ext/value.h"
 #include "ratex/csrc/pass_ext/pass.h"
 #include "ratex/csrc/utils/file.h"
@@ -18,11 +17,9 @@
 #include "lazy_tensors/computation_client/nnc_computation_client.h"
 #include "lazy_tensor_core/csrc/device.h"
 #include "lazy_tensor_core/csrc/ops/ltc_ops.h"
+#include "lazy_tensor_core/csrc/ops/dummy.h"
 
 namespace ratex {
-
-using namespace torch_lazy_tensors::compiler;
-using namespace torch_lazy_tensors::compiler::mem_model_lowering_backend;
 
 std::unique_ptr<ComputationClient> MemModelComputationClient::Create() {
   Options options;
@@ -120,7 +117,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
   auto alias = computation->GetAlias();
   auto outputs = computation->GetOutputs();
   LTC_LOG(INFO) << "Outputs: ";
-  std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t> outputs_map;
+  std::unordered_map<const Node*, int64_t> outputs_map;
   for (int64_t i = 0; i < outputs.size(); i ++) {
     outputs_map.insert(std::make_pair(outputs[i], i));
     LTC_LOG(INFO) << "|-" << outputs[i]->ToString();
@@ -187,9 +184,9 @@ lazy_tensors::ComputationClient* MemModelGetIfInitialized() {
   return MemModelGet();
 }
 
-torch_lazy_tensors::ir::OutputMap<int64_t> AnalyzeUseCount(
-  const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes) {
-  torch_lazy_tensors::ir::OutputMap<int64_t>  use_cnts;
+OutputMap<int64_t> AnalyzeUseCount(
+  const std::vector<const Node*>& topo_sorted_nodes) {
+  OutputMap<int64_t>  use_cnts;
   for (auto* node : topo_sorted_nodes) {
     for (auto pred : node->operands()) {
       if (use_cnts.count(pred))
@@ -252,8 +249,7 @@ std::vector<double> CalculateMemFromShape(const lazy_tensors::Shape& shape) {
  * \param node Pointer to the IR node (operator). 
  * \param live_tensors A map from live tensors to their corresponding TensorInfos. 
  */
-bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node, 
-                 const torch_lazy_tensors::ir::OutputMap<TensorInfo>& live_tensors) {  
+bool IsInplaceOp(const Node* node, const OutputMap<TensorInfo>& live_tensors) {  
   /* 
    * Notice that due to the limitation of lazy tensor IR, we cannot find in-place ops from the 
    * op() method of IR nodes. As a result, we take the following heuristic:
@@ -265,7 +261,7 @@ bool IsInplaceOp(const torch_lazy_tensors::ir::Node* node,
    */
 
   // Special handling of the dummy op
-  // if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy)
+  // if (node->op() == *ops::ltc_dummy)
   //   return true;
 
   // Filter out nodes with no inputs (e.g., constant nodes)
@@ -313,13 +309,13 @@ bool IsViewChangingOp(const c10::Symbol op) {
   return pytorch_view_changing_ops.count(std::string(op.toQualString()));
 }
 
-double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& outputs_map,
-                        const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes,
-                        const std::vector<const torch_lazy_tensors::ir::Node*>& params,
+double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_map,
+                        const std::vector<const Node*>& topo_sorted_nodes,
+                        const std::vector<const Node*>& params,
                         const std::unordered_map<int64_t, int64_t>& alias,
-                        const std::unordered_map<const torch_lazy_tensors::ir::Node*, int64_t>& param_alias,
-                        const torch_lazy_tensors::ir::OutputMap<int64_t>& use_cnts,
-                        std::vector<LayerMemInfo>& memory_breakdown) {
+                        const std::unordered_map<const Node*, int64_t>& param_alias,
+                        const OutputMap<int64_t>& use_cnts,
+                        std::unordered_map<std::string, LayerMemInfo>& memory_breakdown) {
   double curr_mem = 0.0;
   
   /* Data structures for tracking memory in each layer */
@@ -328,20 +324,20 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   memory_breakdown.clear();
   LayerMemInfo curr_layer_info;
   // Set of output tensors (activations)
-  torch_lazy_tensors::ir::OutputSet outputs_in_layer; 
+  OutputSet outputs_in_layer; 
   // Input parameters and activation sizes
-  torch_lazy_tensors::ir::OutputMap<double> layer_params;
-  torch_lazy_tensors::ir::OutputMap<double> layer_input_act;
+  OutputMap<double> layer_params;
+  OutputMap<double> layer_input_act;
 
   // Maintain the current set of live tensors
-  torch_lazy_tensors::ir::OutputMap<TensorInfo> live_tensors;
+  OutputMap<TensorInfo> live_tensors;
   // A list of tensors that have reached the end of their lifetime, together with their sizes
-  std::vector<std::pair<const torch_lazy_tensors::ir::Output, double>> to_be_freed;
+  std::vector<std::pair<const Output, double>> to_be_freed;
 
   // Parameters persist in the memory
   for (auto param_node : params) {
     // We assume parameters are always non-tuples
-    torch_lazy_tensors::ir::Output param_tensor(param_node, 0);
+    Output param_tensor(param_node, 0);
     // Don't include useless parameters
     if (use_cnts.count(param_tensor)) {
       double param_mem = CalculateMemFromShape(Shape(param_tensor.shape()))[0];
@@ -358,11 +354,11 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   // Also add the aliased parameters, but here we don't increment memory
   for (auto param_with_alias : param_alias) {
     auto param_node = param_with_alias.first;
-    torch_lazy_tensors::ir::Output param_tensor(param_node, 0);
+    Output param_tensor(param_node, 0);
     if (use_cnts.count(param_tensor)) {
       auto aliased_param_id = param_with_alias.second;
       auto& aliased_param_node = params.at(aliased_param_id);
-      torch_lazy_tensors::ir::Output aliased_param_tensor(aliased_param_node, 0);
+      Output aliased_param_tensor(aliased_param_node, 0);
       auto& aliased_param_info = live_tensors.at(aliased_param_tensor);
       live_tensors.insert(
         std::make_pair(
@@ -459,7 +455,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
      */
     bool is_inplace = false;
     bool is_alias = false;
-    if (node->op() != *torch_lazy_tensors::ir::ops::ltc_device_data) {
+    if (node->op() != *ops::ltc_device_data) {
       if (IsViewChangingOp(node->op().op)) {
         LTC_LOG(INFO) << "|-View-changing op";
         LTC_CHECK(node->operands().size() == 1) << "View-changing ops with more than one inputs are currently not supported!";
@@ -473,7 +469,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
          * 2. Handle view-sharing differently based on whether the predecesor is a view or not. 
          */
         auto viewing_tensor = (pred_node_info.is_view) ? pred_node_info.viewing : pred_tensor;
-        auto outp_tensor = torch_lazy_tensors::ir::Output(node, 0);
+        auto outp_tensor = Output(node, 0);
         const int64_t use_cnt = use_cnts.count(outp_tensor) ? use_cnts.at(outp_tensor) : 0;
         live_tensors.insert(
           std::make_pair(
@@ -502,7 +498,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         // If the predecessor is a parameter or aliases with a parameter, then the new tensor shares 
         // memory with a parameter. The new tensor cannot be viewing anything. 
         for (int i = 0; i < node->num_outputs(); i ++) {
-          auto outp = torch_lazy_tensors::ir::Output(node, i);
+          auto outp = Output(node, i);
           bool outp_is_param = (i == 0) ? pred_node_info.is_param : false;
           const int64_t use_cnt = use_cnts.count(outp) ? use_cnts.at(outp) : 0;
           live_tensors.insert(
@@ -520,7 +516,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
           is_alias = true;
           // If there is I/O param aliasing, this is the output and mark the param as expired
           auto param_node = params.at(alias.at(outputs_map.at(node)));
-          auto param_tensor = torch_lazy_tensors::ir::Output(param_node, 0);
+          auto param_tensor = Output(param_node, 0);
           LTC_LOG(INFO) << "|-Aliases with param " << param_node->ToString();
           LTC_CHECK(live_tensors.count(param_tensor)) << "Parameter " << param_node->ToString() << " is not live!";
           LTC_CHECK(node->num_outputs() == 1) << "Node " << node->ToString() << " aliases with param " << param_node->ToString()
@@ -531,7 +527,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
             << outp_sizes[0] << " vs. " << param_node_info.size_mbs;
           // Put a new entry
           // In this case the new tensor cannot be viewing any other tensor
-          auto outp_tensor = torch_lazy_tensors::ir::Output(node, 0);
+          auto outp_tensor = Output(node, 0);
           const int64_t use_cnt = use_cnts.count(outp_tensor) ? use_cnts.at(outp_tensor) : 0;
           live_tensors.insert(
             std::make_pair(outp_tensor, TensorInfo(outp_sizes[0], use_cnt, true))
@@ -540,7 +536,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
         } else {
           // No parameter aliasing, add a new entry to live_tensors and increase memory consumption
           for (int i = 0; i < node->num_outputs(); i ++) {
-            auto outp = torch_lazy_tensors::ir::Output(node, i);
+            auto outp = Output(node, i);
             const int64_t use_cnt = use_cnts.count(outp) ? use_cnts.at(outp) : 0;
             live_tensors.insert(
               std::make_pair( 
@@ -562,9 +558,14 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
     LTC_LOG(INFO) << "|-Current mem: " << curr_mem << "MBs";
 
     // Step 3.1: At layer boundaries, update the memory information of the whole layer over here
-    auto metadata = dynamic_cast<torch_lazy_tensors::ir::LayerBoundaryMetaData*>(node->user_metadata());
-    if (metadata != nullptr) {
-      LTC_LOG(INFO) << "Valid user metadata for node " << node->ToString();
+    auto metadata = dynamic_cast<LayerBoundaryMetaData*>(node->user_metadata());
+    if (metadata != nullptr || (node->op() == *ops::ltc_dummy)) {
+      std::string layer_name = "";
+      if (metadata != nullptr)
+        layer_name = metadata->name;
+      else {
+        layer_name = NodeCast<ops::Dummy>(node, ops::ltc_dummy)->name();
+      }
       // Peak memory consumption in this layer
       curr_layer_info.peak_mem_mbs = layer_peak_mem;
       // Output tensors in this layer
@@ -616,7 +617,7 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
       layer_params.clear();
       layer_input_act.clear();
       // Create a new entry
-      memory_breakdown.push_back(curr_layer_info);
+      memory_breakdown.insert(std::make_pair(layer_name, curr_layer_info));
       curr_layer_info = LayerMemInfo();
       layer_peak_mem = 0.0;
     }
@@ -678,18 +679,4 @@ double CalculatePeakMem(const std::unordered_map<const torch_lazy_tensors::ir::N
   return peak_mem;
 }
 
-// void ReplaceUseWithDummy(const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes) {
-//   for (auto node : topo_sorted_nodes) {
-//     if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy) {
-//       auto input_node = node->operand(0).node;
-//       auto all_uses = input_node->uses();
-//       for (auto use : all_uses) {
-//         auto use_node = use.node;
-//         if (use_node != node) {
-//           use_node->ReplaceOperand(use.operand_index, s_ptr, 0);
-//         }
-//       } 
-//     }
-//   }
-// }
 }
