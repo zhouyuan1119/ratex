@@ -1606,15 +1606,16 @@ lazy_tensors::Shape RAFNodeLowering::InferPow(const ir::Node* node) {
 
 lazy_tensors::Shape RAFNodeLowering::InferExpand(const ir::ops::Expand* node) {
   LTC_CHECK_EQ(node->operands().size(), 1U);
-  auto output_shape = node->size();
-  return lazy_tensors::Shape(node->operand(0).shape().element_type(), output_shape);
-  // std::vector<Var> ops;
-  // for (const auto& x : node->operands()) {
-  //   ops.push_back(MakeVar("operand", ToRAFType(x.shape())));
-  // }
-  // Var out = BuildExpand(ops, node);
-  // Expr body = InferType(ExtractBinding(out, ops));
-  // return ToLTCShape(body->checked_type());
+  std::vector<int64_t> size = node->size();
+  lazy_tensors::Shape shape = node->operand(0).node->shape();
+  int offset = size.size() - shape.dimensions_size();
+  LTC_CHECK_GE(size.size(), shape.dimensions_size());
+  for (int i = 0; i < size.size(); ++i) {
+    if (i - offset >= 0) {
+      LTC_CHECK(shape.dimensions(i - offset) == 1 || size[i] == shape.dimensions(i - offset));
+    }
+  }
+  return lazy_tensors::Shape(node->operand(0).shape().element_type(), size);
 }
 
 lazy_tensors::Shape RAFNodeLowering::InferBitwise(const ir::Node* node) {

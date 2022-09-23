@@ -233,7 +233,7 @@ std::vector<int64_t> Helpers::GetPromotedShape(lazy_tensors::Span<const int64_t>
     int64_t dim1 = shape1_dims[shape1_dims.size() - min_size + i];
     int64_t dim2 = shape2_dims[shape2_dims.size() - min_size + i];
     LTC_CHECK(dim1 == dim2 || dim1 == 1 || dim2 == 1)
-        << "(" << absl::StrJoin(shape1_dims, ", ") << ") and (" << absl::StrJoin(shape1_dims, ", ")
+        << "(" << absl::StrJoin(shape1_dims, ", ") << ") and (" << absl::StrJoin(shape2_dims, ", ")
         << ")";
     if (dim1 == 0 || dim2 == 0) {
       dimensions.push_back(0);
