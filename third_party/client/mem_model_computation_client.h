@@ -80,8 +80,8 @@ class MemModelComputationClient : public BaseComputationClient {
   // Must overload BaseData because it is an abstract class
   struct MemModelData : public BaseData {
    public:
-    MemModelData(std::string device, Shape shape)
-        : BaseData(std::move(device), GetShapeData(std::move(shape))) {}
+    MemModelData(std::string device, Shape shape, bool is_param=false)
+        : BaseData(std::move(device), GetShapeData(std::move(shape)), is_param) {}
 
     /*! 
      * \brief Handle is just an integer. Use with care, may cause issues. 

@@ -19,6 +19,7 @@
 #include "ratex/csrc/aten_raf_bridge.h"
 #include "ratex/csrc/utils/ratex_logging.h"
 #include "client/raf_computation_client.h"
+#include "client/mem_model_computation_client.h"
 #include "raf/registry.h"
 #include "raf/src/op/ty/utils.h"
 
@@ -142,6 +143,25 @@ void InitRAFModuleBindings(py::module m) {
     static_cast<ratex::BaseComputationClient::BaseData*>(data.get())->is_param = true;
 
     return tensor;
+  });
+
+  // Try to create fake parameter without actually allocating memory
+  m.def("_raf_fake_parameter", [](at::Tensor tensor) -> at::Tensor {
+    // Get the shape of the tensor
+    auto shape = tensor.sizes();
+    auto dtype = tensor.scalar_type();
+    auto ltc_dtype = torch_lazy_tensors::MakeLtcPrimitiveType(dtype, nullptr);
+    // Create a dummy basedata 
+    std::shared_ptr<ratex::MemModelComputationClient::MemModelData> dummy_data_ptr = 
+      std::make_shared<ratex::MemModelComputationClient::MemModelData>(std::string("lazy"), lazy_tensors::Shape(ltc_dtype, shape), true);
+    lazy_tensors::ComputationClient::DataPtr data = lazy_tensors::ComputationClient::DataPtr(dummy_data_ptr);
+    // Use this fake data to create a device data node
+    auto device_data_node = ir::MakeNode<ir::ops::DeviceData>(data);
+    // LTC_LOG(INFO) << "_raf_fake_parameter: Node created: " << device_data_node->ToString();
+    // Return a lazy tensor created from this node
+    ir::Value value(device_data_node);
+    LazyTensor ret = LazyTensor::Create(value, GetCurrentDevice(), dtype);
+    return bridge::AtenFromLtcTensor(ret);
   });
 
   m.def("_raf_set_amp_enabled", [](bool enable) { GetRAFModelState()->SetAMPEnabled(enable); });
