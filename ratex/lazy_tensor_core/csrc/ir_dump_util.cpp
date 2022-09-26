@@ -15,6 +15,8 @@
 #include "lazy_tensor_core/csrc/compiler/backend_impl_interface.h"
 #include "lazy_tensor_core/csrc/ir_util.h"
 #include "lazy_tensor_core/csrc/lowering_context.h"
+#include "lazy_tensor_core/csrc/ops/dummy.h"
+#include "lazy_tensor_core/csrc/ops/ltc_ops.h"
 #include "lazy_tensors/computation_client/computation_client.h"
 #include "lazy_tensors/computation_client/debug_macros.h"
 
@@ -240,7 +242,11 @@ std::string DumpUtil::PostOrderToText(lazy_tensors::Span<const Node* const> post
     }
     ss << ", id = " << node->id();
     if (node->user_metadata() != nullptr) {
-      ss << ", is_layer_boundary";
+      ss << ", is_layer_boundary, name = " << static_cast<LayerBoundaryMetaData*>(node->user_metadata())->name;
+    }
+    if (node->op() == *torch_lazy_tensors::ir::ops::ltc_dummy) {
+      auto name = static_cast<const torch_lazy_tensors::ir::ops::Dummy*>(node)->name();
+      ss << ", layer_name = " << name;
     }
     if (node->metadata().frame_info.size() > 0) {
       ss << ", " << node->metadata().frame_info[0];

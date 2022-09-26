@@ -21,7 +21,7 @@ class Dummy : public Node {
 
   std::string ToString() const override;
 
-  std::string name() { return name_; }
+  std::string name() const { return name_; }
 
  private:
   std::string name_;

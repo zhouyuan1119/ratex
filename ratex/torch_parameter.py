@@ -4,7 +4,6 @@
 # pylint: disable=protected-access, c-extension-no-member
 """Hooks to PyTorch."""
 import torch
-
 import _RATEXC
 
 
