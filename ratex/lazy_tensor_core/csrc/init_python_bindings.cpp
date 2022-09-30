@@ -692,6 +692,44 @@ void InitLtcModuleBindings(py::module m) {
     }   
     return result;
   });
+  m.def("_ltc_get_node_info",
+        [] () {
+    auto node_info = lazy_tensors::ComputationClient::Get()->GetNodeInfo();
+    std::vector<py::dict> result;
+    for (auto info : node_info) {
+      py::dict info_dict;
+      info_dict["op"] = info.op();
+      info_dict["id"] = info.id();
+      info_dict["layer_name"] = info.layer_name();
+      info_dict["node_type"] = info.node_type();
+      py::tuple uses(info.uses().size());
+      for (int i = 0; i < info.uses().size(); i ++)
+        uses[i] = info.uses()[i];
+      info_dict["uses"] = uses;
+      py::tuple operands(info.operands().size());
+      for (int i = 0; i < info.operands().size(); i ++) {
+        py::tuple operand(2);
+        operand[0] = info.operands()[i].first;
+        operand[1] = info.operands()[i].second;
+        operands[i] = operand;
+      }
+      info_dict["operands"] = operands;
+      py::tuple output_shape(info.output_shape().size());
+      for (int i = 0; i < info.output_shape().size(); i ++) {
+        py::tuple field_shape(2);
+        field_shape[0] = info.output_shape()[i].first;
+        py::tuple dims(info.output_shape()[i].second.size());
+        for (int j = 0; j < info.output_shape()[i].second.size(); j ++) {
+          dims[j] = info.output_shape()[i].second[j];
+        }
+        field_shape[1] = dims;
+        output_shape[i] = field_shape;
+      }
+      info_dict["output_shape"] = output_shape;
+      result.push_back(info_dict);
+   }
+   return result;
+  });
 }
 
 }  // namespace

@@ -97,7 +97,8 @@ def print_mem_breakdown(mem_breakdown):
                 info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
 
 def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
-                                 input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
+                                 input_dtype, output_dtype, input_range=None, output_range=None, 
+                                 n_batches=2):
     """
     Get the peak memory consumption while training the model using an analysis
     pass on the lazy tensor IR. Assuming that the model is in device "lazy". 
@@ -166,7 +167,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
 
     end = time.time()
     print('Memory model elapsed time: ', end - start)
-    return peak_mem_mbs, breakdown_dict
+    return peak_mem_mbs, breakdown_dict, lm.get_ltc_ir_info()
 
 def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):

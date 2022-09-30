@@ -40,6 +40,39 @@ struct LayerMemInfo {
   double peak_mem_isolated_mbs = 0.0;
 };
 
+/*! \brief Class for outputing node info in Python dict format. */
+class NodeInfoForOutput {
+ public:
+  NodeInfoForOutput(const std::string& op, const int64_t id, 
+                    const std::string& layer_name, const std::string& node_type)
+  : op_(op), id_(id), layer_name_(layer_name), node_type_(node_type) {}
+
+  const std::string op() { return op_; }
+  const int64_t id() { return id_; }
+  const std::string layer_name() { return layer_name_; }
+  const std::string node_type() { return node_type_; }
+  const std::vector<int64_t>& uses() { return uses_; }
+  const std::vector<std::pair<int64_t, int64_t>>& operands() { return operands_; }
+  const std::vector<std::pair<std::string, std::vector<int64_t> > >& output_shape() { return output_shape_; }
+
+  void AddUse(const int64_t use_id) { uses_.push_back(use_id); }
+  void AddOperand(const int64_t operand_id, const int64_t operand_tuple_idx) { 
+    operands_.push_back(std::make_pair(operand_id, operand_tuple_idx));
+  }
+  void AddOutputShape(const std::string& dtype, const std::vector<int64_t>& shape) {
+    output_shape_.push_back(std::make_pair(dtype, shape));
+  }
+
+ private:
+  const std::string op_ = "";
+  const int64_t id_ = 0;
+  const std::string layer_name_ = "";
+  const std::string node_type_ = "unknown";
+  std::vector<int64_t> uses_ = {};
+  std::vector<std::pair<int64_t, int64_t>> operands_ = {};
+  std::vector<std::pair<std::string, std::vector<int64_t> > > output_shape_ = {};
+};
+
 class GenericComputation {
  public:
   virtual StatusOr<ProgramShape> GetProgramShape() const = 0;
@@ -252,6 +285,7 @@ class ComputationClient {
 
   virtual double GetPeakMemory() { return 0.0; }
   virtual std::unordered_map<std::string, LayerMemInfo> GetMemoryBreakDown() { return {}; }
+  virtual std::vector<NodeInfoForOutput> GetNodeInfo() { return {}; }
 
  protected:
   // Metrics common to all client interfaces.

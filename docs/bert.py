@@ -37,6 +37,7 @@ config = BertConfig(
     num_attention_heads=64,
     intermediate_size=32768,
     hidden_act="relu",
+    # max_position_embeddings=1024,
     num_labels=10)
 
 def main():
@@ -47,10 +48,11 @@ def main():
     print('Initialize fake model: ', end - start)
     model_lt.train()
     model_lt = wrap_model(model_lt, 'top', max_depth=4)
+    # model_lt = model_lt.to(device="lazy", dtype=torch.half)
     model_lt = model_lt.to(device="lazy")
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = nn.CrossEntropyLoss()
-    peak_memory_ltc, mem_breakdown = analyze_training_peak_memory(
+    peak_memory_ltc, mem_breakdown, node_info = analyze_training_peak_memory(
         model_lt, optimizer_lt, loss_fn, 
         input_shape=(4, 256), output_shape=(4,), 
         input_dtype=torch.int64, output_dtype=torch.int64, 
@@ -73,6 +75,8 @@ def main():
     # print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
     print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))
     print_mem_breakdown(mem_breakdown)
+    for info in node_info:
+        print(info)
 
 if __name__ == "__main__":
     main()

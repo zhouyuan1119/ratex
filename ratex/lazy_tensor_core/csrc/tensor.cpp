@@ -1407,6 +1407,7 @@ void LazyTensor::BuildInputOutputAliases(const std::vector<LazyTensor>& tensors,
                                          lazy_tensors::Span<const size_t> indices,
                                          ir::LoweringContext* lowering_ctx) {
   std::unordered_map<int64_t, size_t> output_tensor_id_map;
+  LTC_LOG(INFO) << "Total " << indices.size() << " output tensors!";
   for (size_t i = 0; i < indices.size(); ++i) {
     size_t tensor_index = indices[i];
     int64_t tensor_id = tensors[tensor_index].GetUniqueId();
@@ -1414,10 +1415,12 @@ void LazyTensor::BuildInputOutputAliases(const std::vector<LazyTensor>& tensors,
   }
   const std::vector<lazy_tensors::ComputationClient::DataPtr>& parameters_data =
       lowering_ctx->GetParametersData();
+  LTC_LOG(INFO) << "Total " << parameters_data.size() << " parameter data!";
   std::vector<ssize_t> alias_map(indices.size(), -1);
   for (size_t i = 0; i < parameters_data.size(); ++i) {
     DeviceDataInfo* data_info = dynamic_cast<DeviceDataInfo*>(parameters_data[i]->info());
     if (data_info != nullptr && !data_info->read_only) {
+      LTC_LOG(INFO) << i << " data_info is valid!";
       auto it = output_tensor_id_map.find(data_info->tensor_id);
       if (it != output_tensor_id_map.end()) {
         size_t output_index = it->second;
@@ -1427,7 +1430,7 @@ void LazyTensor::BuildInputOutputAliases(const std::vector<LazyTensor>& tensors,
           lowering_ctx->SetUpAlias({static_cast<int64_t>(output_index)}, i, {});
           alias_map[output_index] = i;
 
-          LTC_VLOG(5) << "Aliased paramter " << i << " with output " << output_index << ": "
+          LTC_LOG(INFO) << "Aliased paramter " << i << " with output " << output_index << ": "
                       << lazy_tensors::Shape(parameters_data[i]->shape());
         }
       }

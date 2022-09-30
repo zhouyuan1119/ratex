@@ -161,6 +161,7 @@ void InitRAFModuleBindings(py::module m) {
     // Return a lazy tensor created from this node
     ir::Value value(device_data_node);
     LazyTensor ret = LazyTensor::Create(value, GetCurrentDevice(), dtype);
+    data->SetInfo(std::make_shared<DeviceDataInfo>(ret.GetUniqueId(), false));
     return bridge::AtenFromLtcTensor(ret);
   });
 

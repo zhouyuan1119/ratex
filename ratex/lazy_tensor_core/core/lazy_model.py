@@ -734,6 +734,10 @@ def get_memory_breakdown():
     """ Get the memory braekdown of the last graph. """
     return _RATEXC._ltc_get_memory_breakdown()
 
+def get_ltc_ir_info():
+    """ Get the information of each node in the LTC IR. """
+    return _RATEXC._ltc_get_node_info()
+
 def wait_device_ops(devices=[]):
     """Waits for all the async operations on the given devices to complete.
 

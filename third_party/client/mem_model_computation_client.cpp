@@ -157,9 +157,13 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
                                          params,
                                          alias,
                                          param_alias,
-                                         use_cnts,
-                                         memory_breakdown_);
+                                         use_cnts);
   peak_memory_ = peak_mem_mbs;
+
+  // Add some information to the output node info
+  AnnotateLayerName();
+  AnnotateNodeType();
+  ConvertForOutput();
 
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
                                                    ConsumeValue(instance.computation->GetProgramShape()),
@@ -184,7 +188,7 @@ lazy_tensors::ComputationClient* MemModelGetIfInitialized() {
   return MemModelGet();
 }
 
-OutputMap<int64_t> AnalyzeUseCount(
+OutputMap<int64_t> MemModelComputationClient::AnalyzeUseCount(
   const std::vector<const Node*>& topo_sorted_nodes) {
   OutputMap<int64_t>  use_cnts;
   for (auto* node : topo_sorted_nodes) {
@@ -221,7 +225,7 @@ int GetElementSizeInBytes(const PrimitiveType elem_ty) {
   return element_size;
 }
 
-std::vector<double> CalculateMemFromShape(const lazy_tensors::Shape& shape) {
+std::vector<double> MemModelComputationClient::CalculateMemFromShape(const lazy_tensors::Shape& shape) {
   std::vector<double> sizes;
   if (shape.tuple_shapes_size() == 0) {
     // Single tensor, non-tuple
@@ -309,19 +313,18 @@ bool IsViewChangingOp(const c10::Symbol op) {
   return pytorch_view_changing_ops.count(std::string(op.toQualString()));
 }
 
-double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_map,
+double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_map,
                         const std::vector<const Node*>& topo_sorted_nodes,
                         const std::vector<const Node*>& params,
                         const std::unordered_map<int64_t, int64_t>& alias,
                         const std::unordered_map<const Node*, int64_t>& param_alias,
-                        const OutputMap<int64_t>& use_cnts,
-                        std::unordered_map<std::string, LayerMemInfo>& memory_breakdown) {
+                        const OutputMap<int64_t>& use_cnts) {
   double curr_mem = 0.0;
   
   /* Data structures for tracking memory in each layer */
 
   // Memory tracker
-  memory_breakdown.clear();
+  memory_breakdown_.clear();
   LayerMemInfo curr_layer_info;
   // Set of output tensors (activations)
   OutputSet outputs_in_layer; 
@@ -333,6 +336,9 @@ double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_
   OutputMap<TensorInfo> live_tensors;
   // A list of tensors that have reached the end of their lifetime, together with their sizes
   std::vector<std::pair<const Output, double>> to_be_freed;
+
+  // For dumping node information
+  node_info_.clear();
 
   // Parameters persist in the memory
   for (auto param_node : params) {
@@ -375,6 +381,9 @@ double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
     LTC_LOG(INFO) << "|" << node->ToString() << ", uses: " << node->uses().size();
+    // Step 0: add the node to our list
+    node_info_.push_back(NodeInfo(node));
+
     // Step 1: Purge any tensors that can be freed
     /* 
      * A live tensor can be safely freed if:
@@ -617,7 +626,7 @@ double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_
       layer_params.clear();
       layer_input_act.clear();
       // Create a new entry
-      memory_breakdown.insert(std::make_pair(layer_name, curr_layer_info));
+      memory_breakdown_.insert(std::make_pair(layer_name, curr_layer_info));
       curr_layer_info = LayerMemInfo();
       layer_peak_mem = 0.0;
     }
@@ -677,6 +686,82 @@ double CalculatePeakMem(const std::unordered_map<const Node*, int64_t>& outputs_
   }
   LTC_LOG(INFO) << "Peak memory: " << peak_mem << "MBs";
   return peak_mem;
+}
+
+void MemModelComputationClient::AnnotateLayerName() {
+  int64_t total_nodes = node_info_.size();
+  int64_t start = 0, curr = 0;
+
+  while (curr < total_nodes) {
+    auto curr_node = node_info_[curr].node;
+    auto metadata = dynamic_cast<LayerBoundaryMetaData*>(curr_node->user_metadata());
+    if (metadata != nullptr || (curr_node->op() == *ops::ltc_dummy)) {
+      std::string layer_name = "";
+      if (metadata != nullptr)
+        layer_name = metadata->name;
+      else {
+        layer_name = NodeCast<ops::Dummy>(curr_node, ops::ltc_dummy)->name();
+      }
+      for (int64_t i = start; i <= curr; i ++) {
+        node_info_[i].SetName(layer_name);
+      }
+      start = curr + 1;
+    }
+    curr ++;
+  }
+
+  // Annotate the optimizer as well
+  for (int64_t i = start; i < total_nodes; i ++) {
+    node_info_[i].SetName("optimizer");
+  }
+}
+
+void MemModelComputationClient::AnnotateNodeType() {
+  for (auto& i : node_info_) {
+    auto node = i.node;
+    // TODO: fix this and differentiate input vs. weight, activation vs. grad
+    if (node->op() == *ops::ltc_device_data) {
+      i.SetAsWeight();
+    } else {
+      i.SetAsAct();
+    }
+  }
+}
+
+void MemModelComputationClient::ConvertForOutput() {
+  for (auto info : node_info_) {
+    std::string node_ty_str;
+    switch (info.node_type) {
+      case INPUT: { node_ty_str = "input";  break; }
+      case WGT: { node_ty_str = "weight"; break; }
+      case ACT: { node_ty_str = "act"; break; }
+      default: { node_ty_str = "unknown"; break; }
+    }
+    NodeInfoForOutput info_for_output(
+      info.node->op().ToString(), info.node->id(), info.layer_name, node_ty_str);
+    for (auto use : info.node->uses()) {
+      info_for_output.AddUse(use.node->id());
+    }
+    for (auto operand : info.node->operands()) {
+      info_for_output.AddOperand(operand.node->id(), operand.index);
+    }
+    auto& shape = info.node->shape();
+    if (shape.IsTuple()) {
+      for (int i = 0; i < info.node->shape().tuple_shapes_size(); i ++) {
+        auto tuple_field_shape = shape.tuple_shapes(i);
+        info_for_output.AddOutputShape(
+          PrimitiveTypeName(tuple_field_shape.element_type()),
+          std::vector<int64_t>(tuple_field_shape.dimensions().begin(), tuple_field_shape.dimensions().end())
+        );
+      }
+    } else {
+      info_for_output.AddOutputShape(
+          PrimitiveTypeName(shape.element_type()),
+          std::vector<int64_t>(shape.dimensions().begin(), shape.dimensions().end())
+      );
+    }
+    node_info_for_dumping_.push_back(info_for_output);
+  }
 }
 
 }
