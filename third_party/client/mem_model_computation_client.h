@@ -73,6 +73,7 @@ enum NodeType {
   INPUT = 0,
   WGT,
   ACT,
+  GRAD,
   UNKNOWN
 };
 
@@ -84,6 +85,7 @@ struct NodeInfo {
   void SetAsInput() { node_type = INPUT; }
   void SetAsWeight() { node_type = WGT; }
   void SetAsAct() { node_type = ACT; }
+  void SetAsGrad() { node_type = GRAD; }
 
   const torch_lazy_tensors::ir::Node* node;
   std::string layer_name = "";
@@ -240,7 +242,7 @@ class MemModelComputationClient : public BaseComputationClient {
   void AnnotateLayerName();
 
   /*! \brief Annotate the node type info. */
-  void AnnotateNodeType();
+  void AnnotateNodeType(const std::vector<const Node*>& params, const std::vector<const Node*>& outputs);
 
   /*! \brief Convert the node info to output format. */
   void ConvertForOutput();

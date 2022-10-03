@@ -16,6 +16,7 @@ from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_tr
 from transformers import BertForSequenceClassification, BertConfig
 from accelerate import init_empty_weights
 import time
+import json
 class BertModelWrapper(nn.Module):
     """
         A wrapper around huggingface BertModel for memory estimation with our APIs. 
@@ -75,8 +76,8 @@ def main():
     # print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
     print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))
     print_mem_breakdown(mem_breakdown)
-    for info in node_info:
-        print(info)
+    with open('nodes.json', 'w') as f:
+        json.dump(node_info, f)
 
 if __name__ == "__main__":
     main()

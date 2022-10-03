@@ -162,7 +162,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
 
   // Add some information to the output node info
   AnnotateLayerName();
-  AnnotateNodeType();
+  AnnotateNodeType(params, outputs);
   ConvertForOutput();
 
   auto ret = std::make_shared<MemModelComputation>(instance.computation,
@@ -339,6 +339,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
 
   // For dumping node information
   node_info_.clear();
+  node_info_for_dumping_.clear();
 
   // Parameters persist in the memory
   for (auto param_node : params) {
@@ -716,15 +717,61 @@ void MemModelComputationClient::AnnotateLayerName() {
   }
 }
 
-void MemModelComputationClient::AnnotateNodeType() {
+/*! \brief Find the gradient node from a multiplication op */
+const Node* FindGrad(const Node* mul_node) {
+  LTC_CHECK(mul_node->op().op == at::aten::mul) << "Expecting mul op, but got " << mul_node->ToString();
+  auto op0 = mul_node->operand(0).node;
+  auto op1 = mul_node->operand(1).node;
+  LTC_CHECK((op0->op().op == at::aten::expand) ^ (op1->op().op == at::aten::expand)) << "Exactly one operand of the mul must be expanding a constant (learning rate)!";
+  if (op0->op().op == at::aten::expand)
+    return op1;
+  else
+    return op0;
+}
+
+void MemModelComputationClient::AnnotateNodeType(const std::vector<const Node*>& params, 
+                                                 const std::vector<const Node*>& outputs) {
+  std::unordered_set<const Node*> params_set(params.begin(), params.end());
+  std::unordered_set<const Node*> output_set(outputs.begin(), outputs.end());
+  std::unordered_set<const Node*> grads;
+  std::unordered_set<const Node*> wgts;
   for (auto& i : node_info_) {
     auto node = i.node;
-    // TODO: fix this and differentiate input vs. weight, activation vs. grad
     if (node->op() == *ops::ltc_device_data) {
-      i.SetAsWeight();
+      // Mark all device data nodes as inputs at the beginning, we will change it later if it is weight
+      i.SetAsInput();
     } else {
+      // Similarly, mark everything else as activation at first, we will change it later if it is grad
       i.SetAsAct();
     }
+
+    /* 
+     * We find gradient tensors by looking at optimizer updates. Optimizer updates that actually writes
+     * to the weight tensors can be located. The op is usually an add, and the two operators are the
+     * weight tensor and the gradient times learning rate (a constant). We can identify all weight
+     * and gradient tensors in this way. A by-product of this is that all device_data nodes that are
+     * not touched by optimizer updates remain as input tensors. 
+     */
+    if ((i.layer_name == "optimizer") && (output_set.count(node)) && (node->op().op == at::aten::add)) {
+      // LTC_CHECK(node->op().op == at::aten::add) << "Expecting add op at optimizer outputs, but got " << node->ToString();
+      auto op0 = node->operand(0).node;
+      auto op1 = node->operand(1).node;
+      LTC_CHECK(params_set.count(op0) ^ params_set.count(op1)) << "Exactly one operand of the add must be parameter!";
+      if (params_set.count(op0)) {
+        wgts.insert(op0);
+        grads.insert(FindGrad(op1));
+      } else {
+        wgts.insert(op1);
+        grads.insert(FindGrad(op0));
+      }
+    }
+  }
+
+  for (auto& i : node_info_) {
+    if (grads.count(i.node))
+      i.SetAsGrad();
+    else if (wgts.count(i.node))
+      i.SetAsWeight();
   }
 }
 
@@ -735,6 +782,7 @@ void MemModelComputationClient::ConvertForOutput() {
       case INPUT: { node_ty_str = "input";  break; }
       case WGT: { node_ty_str = "weight"; break; }
       case ACT: { node_ty_str = "act"; break; }
+      case GRAD: { node_ty_str = "grad"; break; }
       default: { node_ty_str = "unknown"; break; }
     }
     NodeInfoForOutput info_for_output(

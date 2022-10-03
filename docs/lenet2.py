@@ -22,6 +22,7 @@ import os
 import copy
 from ratex.utils.mem_model_utils import analyze_training_peak_memory, print_mem_breakdown, profile_training_peak_memory, wrap_model
 import accelerate
+import json
 
 class TorchLeNet(nn.Module):
     def __init__(self, input_shape=28, num_classes=10):
@@ -57,8 +58,7 @@ def main():
     optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()
     peak_memory_ltc, mem_breakdown, ir_info = analyze_training_peak_memory(
-        model_lt, optimizer_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10],
-        n_batches=1)
+        model_lt, optimizer_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     
     model_cuda = TorchLeNet()
     model_cuda.train()
@@ -68,8 +68,8 @@ def main():
         model_cuda, optimizer, torch.nn.NLLLoss(), (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
     print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))
-    # print_mem_breakdown(mem_breakdown)
-    # for node in ir_info:
-    #     print(node)
+    print_mem_breakdown(mem_breakdown)
+    with open('nodes.json', 'w') as f:
+        json.dump(ir_info, f)
 if __name__ == "__main__":
     main()
