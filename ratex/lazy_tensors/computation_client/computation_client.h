@@ -43,10 +43,12 @@ struct LayerMemInfo {
 /*! \brief Class for outputing node info in Python dict format. */
 class NodeInfoForOutput {
  public:
-  NodeInfoForOutput(const std::string& op, const int64_t id, 
-                    const std::string& layer_name, const std::string& node_type)
-  : op_(op), id_(id), layer_name_(layer_name), node_type_(node_type) {}
+  NodeInfoForOutput(const std::string& node_str, const std::string& op, 
+                    const int64_t id, const std::string& layer_name, 
+                    const std::string& node_type)
+  : node_str_(node_str), op_(op), id_(id), layer_name_(layer_name), node_type_(node_type) {}
 
+  const std::string node_str() { return node_str_; }
   const std::string op() { return op_; }
   const int64_t id() { return id_; }
   const std::string layer_name() { return layer_name_; }
@@ -64,6 +66,7 @@ class NodeInfoForOutput {
   }
 
  private:
+  const std::string node_str_ = "";
   const std::string op_ = "";
   const int64_t id_ = 0;
   const std::string layer_name_ = "";

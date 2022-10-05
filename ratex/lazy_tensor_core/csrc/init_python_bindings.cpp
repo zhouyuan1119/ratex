@@ -698,6 +698,7 @@ void InitLtcModuleBindings(py::module m) {
     std::vector<py::dict> result;
     for (auto info : node_info) {
       py::dict info_dict;
+      info_dict["node_str"] = info.node_str();
       info_dict["op"] = info.op();
       info_dict["id"] = info.id();
       info_dict["layer_name"] = info.layer_name();

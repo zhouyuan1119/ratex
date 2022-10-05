@@ -786,7 +786,8 @@ void MemModelComputationClient::ConvertForOutput() {
       default: { node_ty_str = "unknown"; break; }
     }
     NodeInfoForOutput info_for_output(
-      info.node->op().ToString(), info.node->id(), info.layer_name, node_ty_str);
+      info.node->ToString(), info.node->op().ToString(), 
+      info.node->id(), info.layer_name, node_ty_str);
     for (auto use : info.node->uses()) {
       info_for_output.AddUse(use.node->id());
     }
