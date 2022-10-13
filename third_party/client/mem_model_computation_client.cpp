@@ -142,7 +142,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
   // Walk the graph and get the use count of each node. 
   // We cannot leverage the use count in lazy tensor IR because over there the
   // uses are maintained in a set, which will cause issues for our analysis. 
-  auto use_cnts = AnalyzeUseCount(post_order_nodes);
+  AnalyzeUseCount(post_order_nodes);
   // LTC_LOG(INFO) << "Got use counts!";
 
   // Collect information for correctly calculating memory with in-place updates
@@ -156,8 +156,7 @@ ComputationClient::ComputationPtr MemModelComputationClient::Compile(
                                          post_order_nodes,
                                          params,
                                          alias,
-                                         param_alias,
-                                         use_cnts);
+                                         param_alias);
   peak_memory_ = peak_mem_mbs;
 
   // Add some information to the output node info
@@ -188,18 +187,17 @@ lazy_tensors::ComputationClient* MemModelGetIfInitialized() {
   return MemModelGet();
 }
 
-OutputMap<int64_t> MemModelComputationClient::AnalyzeUseCount(
+void MemModelComputationClient::AnalyzeUseCount(
   const std::vector<const Node*>& topo_sorted_nodes) {
-  OutputMap<int64_t>  use_cnts;
+  use_cnts_.clear();
   for (auto* node : topo_sorted_nodes) {
     for (auto pred : node->operands()) {
-      if (use_cnts.count(pred))
-        use_cnts[pred] += 1;
+      if (use_cnts_.count(pred))
+        use_cnts_[pred].push_back(node);
       else
-        use_cnts[pred] = 1;
+        use_cnts_[pred] = {node};
     } 
   }
-  return use_cnts;
 }
 
 int GetElementSizeInBytes(const PrimitiveType elem_ty) {
@@ -317,8 +315,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
                         const std::vector<const Node*>& topo_sorted_nodes,
                         const std::vector<const Node*>& params,
                         const std::unordered_map<int64_t, int64_t>& alias,
-                        const std::unordered_map<const Node*, int64_t>& param_alias,
-                        const OutputMap<int64_t>& use_cnts) {
+                        const std::unordered_map<const Node*, int64_t>& param_alias) {
   double curr_mem = 0.0;
   
   /* Data structures for tracking memory in each layer */
@@ -346,14 +343,14 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
     // We assume parameters are always non-tuples
     Output param_tensor(param_node, 0);
     // Don't include useless parameters
-    if (use_cnts.count(param_tensor)) {
+    if (use_cnts_.count(param_tensor)) {
       double param_mem = CalculateMemFromShape(Shape(param_tensor.shape()))[0];
       curr_mem += param_mem;
       // Insert parameters into the live set, they are never removed
       live_tensors.insert(
         std::make_pair(
           param_tensor, 
-          TensorInfo(param_mem, use_cnts.at(param_tensor), true))
+          TensorInfo(param_mem, use_cnts_.at(param_tensor).size(), true))
       );
     }
   }
@@ -362,7 +359,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
   for (auto param_with_alias : param_alias) {
     auto param_node = param_with_alias.first;
     Output param_tensor(param_node, 0);
-    if (use_cnts.count(param_tensor)) {
+    if (use_cnts_.count(param_tensor)) {
       auto aliased_param_id = param_with_alias.second;
       auto& aliased_param_node = params.at(aliased_param_id);
       Output aliased_param_tensor(aliased_param_node, 0);
@@ -370,7 +367,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
       live_tensors.insert(
         std::make_pair(
           param_tensor, 
-          TensorInfo(aliased_param_info.size_mbs, use_cnts.at(param_tensor), true)
+          TensorInfo(aliased_param_info.size_mbs, use_cnts_.at(param_tensor).size(), true)
         )
       );
     }
@@ -381,7 +378,11 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
 
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
+    auto output = Output(node, 0);
     LTC_LOG(INFO) << "|" << node->ToString() << ", uses: " << node->uses().size();
+    if (use_cnts_.count(output))
+      LTC_LOG(INFO) << "| Counted uses: " << use_cnts_.at(output);
+
     // Step 0: add the node to our list
     node_info_.push_back(NodeInfo(node));
 
@@ -480,7 +481,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
          */
         auto viewing_tensor = (pred_node_info.is_view) ? pred_node_info.viewing : pred_tensor;
         auto outp_tensor = Output(node, 0);
-        const int64_t use_cnt = use_cnts.count(outp_tensor) ? use_cnts.at(outp_tensor) : 0;
+        const int64_t use_cnt = use_cnts_.count(outp_tensor) ? use_cnts_.at(outp_tensor).size() : 0;
         live_tensors.insert(
           std::make_pair(
             outp_tensor, 
@@ -510,7 +511,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
         for (int i = 0; i < node->num_outputs(); i ++) {
           auto outp = Output(node, i);
           bool outp_is_param = (i == 0) ? pred_node_info.is_param : false;
-          const int64_t use_cnt = use_cnts.count(outp) ? use_cnts.at(outp) : 0;
+          const int64_t use_cnt = use_cnts_.count(outp) ? use_cnts_.at(outp).size() : 0;
           live_tensors.insert(
             std::make_pair( 
               outp, 
@@ -538,7 +539,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
           // Put a new entry
           // In this case the new tensor cannot be viewing any other tensor
           auto outp_tensor = Output(node, 0);
-          const int64_t use_cnt = use_cnts.count(outp_tensor) ? use_cnts.at(outp_tensor) : 0;
+          const int64_t use_cnt = use_cnts_.count(outp_tensor) ? use_cnts_.at(outp_tensor).size() : 0;
           live_tensors.insert(
             std::make_pair(outp_tensor, TensorInfo(outp_sizes[0], use_cnt, true))
           );
@@ -547,7 +548,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
           // No parameter aliasing, add a new entry to live_tensors and increase memory consumption
           for (int i = 0; i < node->num_outputs(); i ++) {
             auto outp = Output(node, i);
-            const int64_t use_cnt = use_cnts.count(outp) ? use_cnts.at(outp) : 0;
+            const int64_t use_cnt = use_cnts_.count(outp) ? use_cnts_.at(outp).size() : 0;
             live_tensors.insert(
               std::make_pair( 
                 outp, 
@@ -788,8 +789,13 @@ void MemModelComputationClient::ConvertForOutput() {
     NodeInfoForOutput info_for_output(
       info.node->ToString(), info.node->op().ToString(), 
       info.node->id(), info.layer_name, node_ty_str);
-    for (auto use : info.node->uses()) {
-      info_for_output.AddUse(use.node->id());
+    for (int i = 0; i < info.node->num_outputs(); i ++) {
+      auto outp = Output(info.node, i);
+      if (use_cnts_.count(outp)) {
+        for (auto use_node : use_cnts_.at(outp)) {
+          info_for_output.AddUse(use_node->id());
+        }
+      }
     }
     for (auto operand : info.node->operands()) {
       info_for_output.AddOperand(operand.node->id(), operand.index);

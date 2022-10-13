@@ -144,6 +144,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         print('Done batch {}!'.format(batch))
         peak_mem_batch = lm.get_peak_memory()
         peak_mem_mbs = max(peak_mem_mbs, peak_mem_batch)
+        print('All executed layers: ', LayerWrapper.executed_layers)
         if batch != n_batches - 1:
             LayerWrapper.executed_layers.clear()
      
