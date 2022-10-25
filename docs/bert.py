@@ -26,52 +26,56 @@ class BertModelWrapper(nn.Module):
         super(BertModelWrapper, self).__init__()
         self.num_labels = config.num_labels
         self.berta = BertForSequenceClassification(config)
+        self.berta.gradient_checkpointing_enable()
     
     def forward(self, x, **kwargs):
         res = self.berta(x, return_dict=False, **kwargs)[0].view(-1, self.num_labels)
         return res
 
+bs = 8
+vocab_size = 50000
+seq_len = 1024
+hidden_size = 8192
+
 config = BertConfig(
-    vocab_size=50000,
-    hidden_size=8192,
-    num_hidden_layers=48,
+    vocab_size=vocab_size,
+    hidden_size=hidden_size,
+    num_hidden_layers=64,
     num_attention_heads=64,
-    intermediate_size=32768,
-    hidden_act="relu",
-    # max_position_embeddings=1024,
+    intermediate_size=hidden_size*4,
+    max_position_embeddings=seq_len,
     num_labels=10)
 
 def main():
     start = time.time()
     with init_empty_weights():
         model_lt = BertModelWrapper(config)
+    model_lt = model_lt.half()
     end = time.time()
     print('Initialize fake model: ', end - start)
     model_lt.train()
     model_lt = wrap_model(model_lt, 'top', max_depth=4)
-    # model_lt = model_lt.to(device="lazy", dtype=torch.half)
     model_lt = model_lt.to(device="lazy")
-    optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = nn.CrossEntropyLoss()
     peak_memory_ltc, mem_breakdown, node_info = analyze_training_peak_memory(
-        model_lt, optimizer_lt, loss_fn, 
-        input_shape=(4, 256), output_shape=(4,), 
+        model_lt, loss_fn, 
+        input_shape=(bs, seq_len), output_shape=(bs,), 
         input_dtype=torch.int64, output_dtype=torch.int64, 
-        input_range=[0, 50000], output_range=[0, 10],
+        input_range=[0, vocab_size], output_range=[0, 10],
         n_batches=2)
 
     # start = time.time()
     # model_cuda = BertModelWrapper(config)
     # end = time.time()
     # print('Initialize real model: ', end - start)
+    # model_cuda = model_cuda.half()
     # model_cuda.train()
     # model_cuda = model_cuda.cuda()
-    # optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     # peak_memory_profiled = profile_training_peak_memory(
-    #     model_cuda, optimizer, torch.nn.NLLLoss(), 
-    #     input_shape=(64, 256), output_shape=(64,), 
+    #     model_cuda, torch.nn.NLLLoss(), 
+    #     input_shape=(bs, seq_len), output_shape=(bs,), 
     #     input_dtype=torch.int64, output_dtype=torch.int64, 
-    #     input_range=[0, 30522], output_range=[0, 10],
+    #     input_range=[0, vocab_size], output_range=[0, 10],
     #     n_batches=2)
     # print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
     print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))

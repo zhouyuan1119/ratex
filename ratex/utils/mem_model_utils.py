@@ -7,6 +7,7 @@ import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
 from ratex.core.lazy_model import dummy, dummy_bwd
 import time
+import gc
 
 class DummyFunc(torch.autograd.Function):
     """
@@ -96,7 +97,7 @@ def print_mem_breakdown(mem_breakdown):
             print('  |-bwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
                 info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
 
-def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
+def analyze_training_peak_memory(model, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, 
                                  n_batches=2):
     """
@@ -105,7 +106,6 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
 
     Args:
         model: torch.nn.Module  The model to be analyzed. 
-        optimizer: torch.optim.Optimizer  The optimizer to be used during training. 
         loss_fn: torch.nn.Module  The loss function. 
         input_shape: Tuple[int]  Input shape, including the batch dimension. Used to construct random input. 
         output_shape: Tuple[int]  Output shape, including the batch dimension. Used to construct random labels. 
@@ -130,7 +130,6 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         inputs = inputs.to(device="lazy")
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.to(device="lazy")  # One-hot
-        optimizer.zero_grad()
         outputs = model(inputs)
         print('Executed layers in fwd: ', LayerWrapper.executed_layers)
         loss = loss_fn(outputs, labels)
@@ -139,7 +138,6 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         marker_tensor = random_torch_tensor((1,), torch.float32)
         marker_tensor = marker_tensor.to(device="lazy")
         _ = dummy(marker_tensor, LayerWrapper.executed_layers[0] + '.bwd')
-        optimizer.step()
         lm.mark_step()
         print('Done batch {}!'.format(batch))
         peak_mem_batch = lm.get_peak_memory()
@@ -170,7 +168,7 @@ def analyze_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
     print('Memory model elapsed time: ', end - start)
     return peak_mem_mbs, breakdown_dict, lm.get_ltc_ir_info()
 
-def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_shape, 
+def profile_training_peak_memory(model, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):
     """Same with the function above, except that the peak memory is retrived from PyTorch CUDA utils."""
 
@@ -178,17 +176,18 @@ def profile_training_peak_memory(model, optimizer, loss_fn, input_shape, output_
         assert p.device.type == 'cuda', 'The model is not on GPU, please run model.to(device="cuda") first. '
 
     for i in range(n_batches):
+        gc.collect()
+        torch.cuda.empty_cache()
         torch.cuda.reset_max_memory_allocated()
         # Create dummy inputs
         inputs = random_torch_tensor(input_shape, input_dtype, input_range)
         inputs = inputs.cuda()
         labels = random_torch_tensor(output_shape, output_dtype, output_range)
         labels = labels.cuda()  # One-hot
-        optimizer.zero_grad()
         outputs = model(inputs)
         loss = loss_fn(outputs, labels)
         loss.backward()
-        optimizer.step()
+        print('Memory of this batch: ', torch.cuda.max_memory_allocated() / (1024*1024))
     return torch.cuda.max_memory_allocated() / (1024*1024)
 
 def wrap_model(model: torch.nn.Module, name: str, cur_depth: int = 0, max_depth: int = 1):

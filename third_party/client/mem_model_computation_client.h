@@ -216,12 +216,6 @@ class MemModelComputationClient : public BaseComputationClient {
    */
   void AnalyzeUseCount(const std::vector<const torch_lazy_tensors::ir::Node*>& topo_sorted_nodes);
 
-  /*!
-   * \brief Calculate the size of the output of an op, in MBs, from the op's shape. If the op generates
-   * a tuple, the returned vector will have multiple elements. 
-   */
-  std::vector<double> CalculateMemFromShape(const lazy_tensors::Shape& shape);
-
   /*! 
    * \brief Given a program specified in lazy tensor IR, traverse the graph and compute peak memory 
    * consumption in MBs. This function also provides a layer-wise breakdown of memory consumption. 

@@ -223,7 +223,7 @@ int GetElementSizeInBytes(const PrimitiveType elem_ty) {
   return element_size;
 }
 
-std::vector<double> MemModelComputationClient::CalculateMemFromShape(const lazy_tensors::Shape& shape) {
+std::vector<double> CalculateMemFromShape(const lazy_tensors::Shape& shape) {
   std::vector<double> sizes;
   if (shape.tuple_shapes_size() == 0) {
     // Single tensor, non-tuple
@@ -250,8 +250,11 @@ std::vector<double> MemModelComputationClient::CalculateMemFromShape(const lazy_
  * \brief Use a heuristic to check if an op is an in-place op. 
  * \param node Pointer to the IR node (operator). 
  * \param live_tensors A map from live tensors to their corresponding TensorInfos. 
+ * \param outputs_map A map containing a mapping of output nodes. We just use it to check whether
+ * a tensor is a primary output or not. 
  */
-bool IsInplaceOp(const Node* node, const OutputMap<TensorInfo>& live_tensors) {  
+bool IsInplaceOp(const Node* node, const OutputMap<TensorInfo>& live_tensors,
+                 const std::unordered_map<const Node*, int64_t>& outputs_map) {  
   /* 
    * Notice that due to the limitation of lazy tensor IR, we cannot find in-place ops from the 
    * op() method of IR nodes. As a result, we take the following heuristic:
@@ -276,6 +279,9 @@ bool IsInplaceOp(const Node* node, const OutputMap<TensorInfo>& live_tensors) {
   if (pred_node_info.use_cnt > 1)
     return false;
 
+  auto output_shape = node->shape();
+  auto output_shape_sizes = CalculateMemFromShape(output_shape);
+
   // Check if the first operand is a view
   if (pred_node_info.is_view) {
     // If the first operand is a view, must check its original tensor
@@ -284,14 +290,15 @@ bool IsInplaceOp(const Node* node, const OutputMap<TensorInfo>& live_tensors) {
     // It must also have no future uses
     auto viewed_tensor_info = live_tensors.at(viewed_tensor);
     if ((viewed_tensor_info.use_cnt > 0) || (viewed_tensor_info.viewers.size() > 1) ||
-        (viewed_tensor_info.size_mbs != pred_node_info.size_mbs))
+        (viewed_tensor_info.size_mbs != output_shape_sizes[0]))
       return false;
-    // If this check passes, go on to check shape
+  } else if (outputs_map.count(pred_node.node)) {
+    // If the predecessor is a primary output then we cannot touch it
+    return false;
   }
   
   // Check output shape
   auto pred_node_shape = pred_node.shape();
-  auto output_shape = node->shape();
   if (output_shape.tuple_shapes_size() > 0)
     output_shape = output_shape.tuple_shapes(0);
   if (!(pred_node_shape == output_shape))
@@ -379,9 +386,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
   // Assuming all nodes are sorted in topological order and the ops will be executed exactly in this order
   for (auto* node : topo_sorted_nodes) {
     auto output = Output(node, 0);
-    LTC_LOG(INFO) << "|" << node->ToString() << ", uses: " << node->uses().size();
-    if (use_cnts_.count(output))
-      LTC_LOG(INFO) << "| Counted uses: " << use_cnts_.at(output);
+    LTC_LOG(INFO) << "| Current node: " << node->ToString() << ", uses: " << node->uses().size();
 
     // Step 0: add the node to our list
     node_info_.push_back(NodeInfo(node));
@@ -490,7 +495,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
         );
         live_tensors.at(viewing_tensor).viewers.insert(outp_tensor);
         outputs_in_layer.insert(outp_tensor);
-      } else if (IsInplaceOp(node, live_tensors)) {
+      } else if (IsInplaceOp(node, live_tensors, outputs_map)) {
         LTC_LOG(INFO) << "|-Inplace op";
         is_inplace = true;
         auto pred_tensor = node->operand(0);
@@ -593,11 +598,11 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
       // Input tensors, including parameters and activations
       for (auto p : layer_params) {
         curr_layer_info.param_mbs += p.second;
-        LTC_LOG(INFO) << "Counting param " << p.first.ToString() << " for " << p.second << " MBs";
+        // LTC_LOG(INFO) << "Counting param " << p.first.ToString() << " for " << p.second << " MBs";
       }
       for (auto p : layer_input_act) {
         curr_layer_info.inp_mbs += p.second;
-        LTC_LOG(INFO) << "Counting input act " << p.first.ToString() << " for " << p.second << " MBs";
+        // LTC_LOG(INFO) << "Counting input act " << p.first.ToString() << " for " << p.second << " MBs";
       }
       // "Isolated peak memory", this is basically the peak memory inside this layer, minus the size
       // of live tensors that are untouched in this layer. "Untouched" means:
@@ -613,7 +618,7 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
         if (!outputs_in_layer.count(output) && !layer_input_act.count(output) && 
             !layer_params.count(output) && !t_info.is_expired && !t_info.is_view) {
           curr_layer_info.peak_mem_isolated_mbs -= p.second.size_mbs;
-          LTC_LOG(INFO) << "Purge tensor " << output.ToString() << " because it is untouched!";
+          // LTC_LOG(INFO) << "Purge tensor " << output.ToString() << " because it is untouched!";
         }
       }
       // LTC_LOG(INFO) << "mem_at_layer_begin_mbs: " << mem_at_layer_begin_mbs;
@@ -647,8 +652,6 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
      * of its views have reached the end of their life times. Non-view predecessors are also freed 
      * over there.  
      */
-    // Potential optimization: hold a list of tensors to be freed so that we don't need to traverse
-    // the whole live set every time
     for (auto pred : node->operands()) {
       LTC_CHECK(live_tensors.count(pred)) << "Predecessor " << pred.ToString() << " is not live!";
       auto& pred_node_info = live_tensors.at(pred);
@@ -671,9 +674,10 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
        * 2. Have not been in-place updated
        * 3. Has no use count
        * 4. Is not currently viewed by some other tensor
+       * 5. Is not a primary output
        */
-      if (!pred_node_info.is_param && !pred_node_info.is_expired && (pred_node_info.use_cnt == 0) && 
-          (pred_node_info.viewers.size() == 0)) {
+      if (!pred_node_info.is_param && !pred_node_info.is_expired && !outputs_map.count(pred.node) &&
+          (pred_node_info.use_cnt == 0) && (pred_node_info.viewers.size() == 0)) {
         to_be_freed.push_back(std::make_pair(pred, pred_node_info.size_mbs));
         if (pred_node_info.is_view) {
           auto& viewing_node_info = live_tensors.at(pred_node_info.viewing);
@@ -682,6 +686,17 @@ double MemModelComputationClient::CalculatePeakMem(const std::unordered_map<cons
               (viewing_node_info.use_cnt == 0) && (viewing_node_info.viewers.size() == 0)) {
             to_be_freed.push_back(std::make_pair(pred_node_info.viewing, viewing_node_info.size_mbs));
           }
+        }
+      }
+    }
+    // Outputs that have no use and are not primary outputs are released immediately
+    for (int i = 0; i < node->num_outputs(); i ++) {
+      auto outp = Output(node, i);
+      if (live_tensors.count(outp)) {
+        auto node_info = live_tensors.at(outp);
+        if (!node_info.is_param && !outputs_map.count(node) && (node_info.use_cnt == 0)) {
+          double size = (node_info.is_view) ? 0.0 : node_info.size_mbs;
+          to_be_freed.push_back(std::make_pair(outp, size));
         }
       }
     }

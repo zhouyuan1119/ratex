@@ -51,21 +51,18 @@ class TorchLeNet(nn.Module):
 def main():
     with accelerate.init_empty_weights():
         model_lt = TorchLeNet()
-    # model_lt = TorchLeNet()
     model_lt.train()
     model_lt = wrap_model(model_lt, 'top')
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
-    optimizer_lt = torch.optim.SGD(model_lt.parameters(), lr=0.001)
     loss_fn = torch.nn.NLLLoss()
     peak_memory_ltc, mem_breakdown, ir_info = analyze_training_peak_memory(
-        model_lt, optimizer_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
+        model_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     
     model_cuda = TorchLeNet()
     model_cuda.train()
     model_cuda = model_cuda.cuda()
-    optimizer = optim.SGD(model_cuda.parameters(), lr=0.001)
     peak_memory_profiled = profile_training_peak_memory(
-        model_cuda, optimizer, torch.nn.NLLLoss(), (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
+        model_cuda, torch.nn.NLLLoss(), (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     print('Profiled peak memory: {0:6.2f} MBs'.format(peak_memory_profiled))
     print('Analyzed peak memory: {0:6.2f} MBs'.format(peak_memory_ltc))
     print_mem_breakdown(mem_breakdown)
