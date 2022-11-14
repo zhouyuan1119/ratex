@@ -183,6 +183,40 @@ at::Tensor DummyBwd(const at::Tensor& input, const std::string& name) {
   return bridge::AtenFromLtcTensor(std::move(result));
 }
 
+std::tuple<at::Tensor, at::Tensor, at::Tensor> FusedLayerNormAffineFwd(
+  const at::Tensor& input, const at::Tensor& wgt, const at::Tensor& bias, 
+  const std::vector<int64_t>& normalized_shape, double eps) {
+  auto result = LazyTensor::fused_layer_norm_affine_fwd(
+    bridge::GetLtcTensor(input),
+    bridge::GetLtcTensor(wgt),
+    bridge::GetLtcTensor(bias),
+    normalized_shape,
+    eps);
+  return std::make_tuple(
+    bridge::AtenFromLtcTensor(std::move(std::get<0>(result))),
+    bridge::AtenFromLtcTensor(std::move(std::get<1>(result))),
+    bridge::AtenFromLtcTensor(std::move(std::get<2>(result))));
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor> FusedLayerNormAffineBwd(
+  const at::Tensor& grad_output, const at::Tensor& mean, const at::Tensor& invvar, 
+  const at::Tensor& input, const std::vector<int64_t>& normalized_shape, 
+  const at::Tensor& wgt, const at::Tensor& bias, double eps) {
+  auto result = LazyTensor::fused_layer_norm_affine_bwd(
+    bridge::GetLtcTensor(grad_output),
+    bridge::GetLtcTensor(mean),
+    bridge::GetLtcTensor(invvar),
+    bridge::GetLtcTensor(input),
+    normalized_shape,
+    bridge::GetLtcTensor(wgt),
+    bridge::GetLtcTensor(bias),
+    eps);
+  return std::make_tuple(
+    bridge::AtenFromLtcTensor(std::move(std::get<0>(result))),
+    bridge::AtenFromLtcTensor(std::move(std::get<1>(result))),
+    bridge::AtenFromLtcTensor(std::move(std::get<2>(result))));
+}
+
 std::pair<at::Tensor, std::shared_ptr<ir::Value>> AllReduce(
     const std::string& reduce_type, const at::Tensor& input,
     const std::shared_ptr<ir::Value>& token, double scale,
@@ -521,6 +555,36 @@ void InitLtcModuleBindings(py::module m) {
   m.def("_ltc_dummy_bwd", [](const at::Tensor& input, const std::string& name) {
     auto result = DummyBwd(input, name);
     return torch::autograd::make_variable(result, /*requires_grad=*/input.requires_grad());
+  });
+  m.def("_ltc_fused_layer_norm_affine_fwd", [](
+    const at::Tensor& input, const at::Tensor& wgt, const at::Tensor& bias, 
+    const py::tuple& normalized_shape, double eps) {
+    std::vector<int64_t> normalized_shape_;
+    for (int i = 0; i < normalized_shape.size(); i ++) {
+      auto elm = normalized_shape[i];
+      normalized_shape_.push_back(elm.cast<int64_t>());
+    }
+    auto result = FusedLayerNormAffineFwd(input, wgt, bias, normalized_shape_, eps);
+    auto return_tuple = py::tuple(3);
+    return_tuple[0] = torch::autograd::make_variable(std::get<0>(result), /*requires_grad=*/input.requires_grad());
+    // Mean and invvar tensors do not require grad
+    return_tuple[1] = torch::autograd::make_variable(std::get<1>(result), /*requires_grad=*/false);
+    return_tuple[2] = torch::autograd::make_variable(std::get<2>(result), /*requires_grad=*/false);
+    return return_tuple;
+  });
+  m.def("_ltc_fused_layer_norm_affine_bwd", [](
+    const at::Tensor& grad_output, const at::Tensor& mean, const at::Tensor& invvar, const at::Tensor& input, 
+    const py::tuple& normalized_shape, const at::Tensor& wgt, const at::Tensor& bias, double eps) {
+    std::vector<int64_t> normalized_shape_;
+    for (auto elm : normalized_shape)
+      normalized_shape_.push_back(elm.cast<int64_t>());
+    auto result = FusedLayerNormAffineBwd(grad_output, mean, invvar, input, normalized_shape_, wgt, bias, eps);
+    auto return_tuple = py::tuple(3);
+    return_tuple[0] = torch::autograd::make_variable(std::get<0>(result), /*requires_grad=*/false);
+    // Mean and invvar tensors do not require grad
+    return_tuple[1] = torch::autograd::make_variable(std::get<1>(result), /*requires_grad=*/false);
+    return_tuple[2] = torch::autograd::make_variable(std::get<2>(result), /*requires_grad=*/false);
+    return return_tuple;
   });
   m.def("_ltc_all_reduce", [](const std::string& reduce_type, const at::Tensor& input,
                               const std::shared_ptr<ir::Value>& token, double scale,

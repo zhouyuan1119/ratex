@@ -149,3 +149,25 @@ def dummy_bwd(input, name):
     """
     assert isinstance(input, torch.Tensor), "Input to the dummy op must be a torch Tensor!"
     return _RATEXC._ltc_dummy_bwd(input, name+'.bwd')
+
+def fused_layer_norm_affine_fwd(input, normalized_shape, weight, bias, eps):
+    """
+        Another dummy op to replace APEX fused layer norm fwd kernel. This op does not do any
+        compute, it just creates a node in the generated lazy tensor IR. 
+    """
+    assert isinstance(input, torch.Tensor), "Input must be a torch Tensor!"
+    assert isinstance(weight, torch.Tensor), "Weight must be a torch Tensor!"
+    assert isinstance(bias, torch.Tensor), "Bias must be a torch Tensor!"
+    return _RATEXC._ltc_fused_layer_norm_affine_fwd(input, weight, bias, normalized_shape, eps)
+
+def fused_layer_norm_affine_bwd(grad_output, mean, invvar, input, normalized_shape, weight, bias, eps):
+    """
+        Replace the APEX fused layer norm bwd kernel. 
+    """
+    assert isinstance(grad_output, torch.Tensor), "Grad output must be a torch Tensor!"
+    assert isinstance(input, torch.Tensor), "Input must be a torch Tensor!"
+    assert isinstance(weight, torch.Tensor), "Weight must be a torch Tensor!"
+    assert isinstance(bias, torch.Tensor), "Bias must be a torch Tensor!"
+    assert isinstance(mean, torch.Tensor), "Mean must be a torch Tensor!"
+    assert isinstance(invvar, torch.Tensor), "Invvar must be a torch Tensor!"
+    return _RATEXC._ltc_fused_layer_norm_affine_bwd(grad_output, mean, invvar, input, normalized_shape, weight, bias, eps)

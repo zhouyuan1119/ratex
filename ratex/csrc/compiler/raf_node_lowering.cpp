@@ -121,6 +121,8 @@
 #include "lazy_tensor_core/csrc/ops/view.h"
 #include "lazy_tensor_core/csrc/ops/embedding.h"
 #include "lazy_tensor_core/csrc/ops/embedding_dense_backward.h"
+#include "lazy_tensor_core/csrc/ops/fused_layer_norm_affine_fwd.h"
+#include "lazy_tensor_core/csrc/ops/fused_layer_norm_affine_bwd.h"
 #include "lazy_tensor_core/csrc/tensor_util.h"
 #include "lazy_tensor_core/csrc/helpers.h"
 #include "lazy_tensors/shape_util.h"
@@ -269,6 +271,8 @@ class RAFNodeLowering : public NodeLowering {
   lazy_tensors::Shape InferAsStridedViewUpdate(const ir::ops::AsStridedViewUpdate* node);
   lazy_tensors::Shape InferDropout(const ir::ops::Dropout* node);
   lazy_tensors::Shape InferDropoutBackward(const ir::ops::DropoutBackward* node);
+  lazy_tensors::Shape InferFusedLayerNormAffineFwd(const ir::ops::FusedLayerNormAffineFwd* node);
+  lazy_tensors::Shape InferFusedLayerNormAffineBwd(const ir::ops::FusedLayerNormAffineBwd* node);
   lazy_tensors::Shape InferCast(const ir::ops::Cast* node);
   lazy_tensors::Shape InferSum(const ir::ops::Sum* node);
   lazy_tensors::Shape InferAny(const ir::ops::Any* node);
@@ -1592,11 +1596,47 @@ lazy_tensors::Shape RAFNodeLowering::Infer(const ir::Node* node) {
       if (kind == *ir::ops::ltc_dummy) {
         return Shape(node->operand(0).shape());
       }
+      if (kind == *ir::ops::ltc_fused_layer_norm_affine_fwd) {
+        return InferFusedLayerNormAffineFwd(
+          ir::NodeCast<ir::ops::FusedLayerNormAffineFwd>(node, *ir::ops::ltc_fused_layer_norm_affine_fwd)
+        );
+      }
+      if (kind == *ir::ops::ltc_fused_layer_norm_affine_bwd) {
+        return InferFusedLayerNormAffineBwd(
+          ir::NodeCast<ir::ops::FusedLayerNormAffineBwd>(node, *ir::ops::ltc_fused_layer_norm_affine_bwd)
+        );
+      }
       LTC_LOG(FATAL) << "Shape inference not supported for operator: " << kind;
     }
   }
 }
 
+lazy_tensors::Shape RAFNodeLowering::InferFusedLayerNormAffineBwd(const ir::ops::FusedLayerNormAffineBwd* node) {
+  LTC_CHECK_EQ(node->operands().size(), 6U);
+  // Assuming three outputs: grad output, grad wgt, grad bias
+  // The grads have the same shape as their corresponding inputs/wgts
+  auto input_shape = node->operand(3).shape();
+  auto wgt_shape = node->operand(4).shape();
+  auto bias_shape = node->operand(5).shape();
+  return lazy_tensors::Shape({input_shape, wgt_shape, bias_shape});
+}
+
+lazy_tensors::Shape RAFNodeLowering::InferFusedLayerNormAffineFwd(const ir::ops::FusedLayerNormAffineFwd* node) {
+  LTC_CHECK_EQ(node->operands().size(), 3U);
+  // Assuming three outputs: normalized output, mean, variance
+  // Normalized output has the same shape as input, while mean and variance have the same shape as
+  // the unnormalized dimensions
+  auto input_shape = node->operand(0).shape();
+  auto wgt_shape = node->operand(1).shape();
+  int mean_var_shape_offset = input_shape.dimensions_size() - wgt_shape.dimensions_size();
+  LTC_CHECK_GE(mean_var_shape_offset, 1U);
+  std::vector<int64_t> shape_dims;
+  for (int i = 0; i < mean_var_shape_offset; i ++) {
+    shape_dims.push_back(input_shape.dimensions(i));
+  }
+  lazy_tensors::Shape mean_var_shape(input_shape.element_type(), shape_dims);
+  return lazy_tensors::Shape({input_shape, mean_var_shape, mean_var_shape});
+}
 lazy_tensors::Shape RAFNodeLowering::InferPow(const ir::Node* node) {
   LTC_CHECK_EQ(node->operands().size(), 2U);
   auto x_shape = node->operand(0).shape();

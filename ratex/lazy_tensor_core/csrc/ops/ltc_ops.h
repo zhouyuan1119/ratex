@@ -46,6 +46,8 @@ extern const OpKindWrapper ltc_cast;
 extern const OpKindWrapper ltc_collective_permute;
 extern const OpKindWrapper ltc_cross_replica_sum;
 extern const OpKindWrapper ltc_dummy;
+extern const OpKindWrapper ltc_fused_layer_norm_affine_fwd;
+extern const OpKindWrapper ltc_fused_layer_norm_affine_bwd;
 extern const OpKindWrapper ltc_all_gather;
 extern const OpKindWrapper ltc_device_data;
 extern const OpKindWrapper ltc_diagonal_view_update;

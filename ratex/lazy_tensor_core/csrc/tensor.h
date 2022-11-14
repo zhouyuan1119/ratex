@@ -206,6 +206,13 @@ class LazyTensor {
   //////////////////////////////////////////////////////////////////////////////
   static LazyTensor dummy(const LazyTensor& input, const std::string& name);
   static LazyTensor dummy_bwd(const LazyTensor& input, const std::string& name);
+  static std::tuple<LazyTensor, LazyTensor, LazyTensor> fused_layer_norm_affine_fwd(
+    const LazyTensor& input, const LazyTensor& wgt, const LazyTensor& bias,
+    const std::vector<int64_t>& normalized_shape,double eps);
+  static std::tuple<LazyTensor, LazyTensor, LazyTensor> fused_layer_norm_affine_bwd(
+    const LazyTensor& grad_output, const LazyTensor& mean, const LazyTensor& invvar,
+    const LazyTensor& input, const std::vector<int64_t>& normalized_shape, 
+    const LazyTensor& wgt, const LazyTensor& bias, double eps);
 
   static std::pair<LazyTensor, ir::Value> all_reduce(const LazyTensor& input,
                                                      const ir::Value& token,

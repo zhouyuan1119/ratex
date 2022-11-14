@@ -24,6 +24,8 @@
 #include "lazy_tensor_core/csrc/ops/all_reduce.h"
 #include "lazy_tensor_core/csrc/ops/all_to_all.h"
 #include "lazy_tensor_core/csrc/ops/dummy.h"
+#include "lazy_tensor_core/csrc/ops/fused_layer_norm_affine_fwd.h"
+#include "lazy_tensor_core/csrc/ops/fused_layer_norm_affine_bwd.h"
 #include "lazy_tensor_core/csrc/ops/amp_foreach_non_finite_check_and_unscale.h"
 #include "lazy_tensor_core/csrc/ops/amp_update_scale.h"
 #include "lazy_tensor_core/csrc/ops/any.h"
@@ -322,6 +324,38 @@ LazyTensor LazyTensor::dummy(const LazyTensor& input, const std::string& name) {
 
 LazyTensor LazyTensor::dummy_bwd(const LazyTensor& input, const std::string& name) {
   return input.CreateFrom(ir::Value(ir::MakeNode<ir::ops::Dummy>(input.GetIrValue(), name), 0));
+}
+
+std::tuple<LazyTensor, LazyTensor, LazyTensor> LazyTensor::fused_layer_norm_affine_fwd(
+    const LazyTensor& input, const LazyTensor& wgt, const LazyTensor& bias,
+    const std::vector<int64_t>& normalized_shape, double eps) {
+  auto input_value = input.GetIrValue();
+  auto wgt_value = wgt.GetIrValue();
+  auto bias_value = bias.GetIrValue();
+  ir::NodePtr node = ir::MakeNode<ir::ops::FusedLayerNormAffineFwd>(
+    input_value, wgt_value, bias_value, normalized_shape, eps);
+  LazyTensor output = input.CreateFrom(ir::Value(node, 0));
+  LazyTensor mean = input.CreateFrom(ir::Value(node, 1));
+  LazyTensor invvar = input.CreateFrom(ir::Value(node, 2));
+  return std::make_tuple(std::move(output), std::move(mean), std::move(invvar));
+}
+
+std::tuple<LazyTensor, LazyTensor, LazyTensor> LazyTensor::fused_layer_norm_affine_bwd(
+    const LazyTensor& grad_output, const LazyTensor& mean, const LazyTensor& invvar,
+    const LazyTensor& input, const std::vector<int64_t>& normalized_shape, 
+    const LazyTensor& wgt, const LazyTensor& bias, double eps) {
+  auto grad_output_value = grad_output.GetIrValue();
+  auto mean_value = mean.GetIrValue();
+  auto invvar_value = invvar.GetIrValue();
+  auto input_value = input.GetIrValue();
+  auto wgt_value = wgt.GetIrValue();
+  auto bias_value = bias.GetIrValue();
+  ir::NodePtr node = ir::MakeNode<ir::ops::FusedLayerNormAffineBwd>(
+    grad_output_value, mean_value, invvar_value, input_value, wgt_value, bias_value, normalized_shape, eps);
+  LazyTensor grad_input = grad_output.CreateFrom(ir::Value(node, 0));
+  LazyTensor grad_wgt = grad_output.CreateFrom(ir::Value(node, 1));
+  LazyTensor grad_bias = grad_output.CreateFrom(ir::Value(node, 2));
+  return std::make_tuple(std::move(grad_input), std::move(grad_wgt), std::move(grad_bias));
 }
 
 std::pair<LazyTensor, ir::Value> LazyTensor::all_reduce(const LazyTensor& input,

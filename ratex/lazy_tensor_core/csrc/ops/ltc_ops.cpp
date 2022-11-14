@@ -17,6 +17,8 @@ const OpKindWrapper ltc_cast("lazy_tensors::cast");
 const OpKindWrapper ltc_collective_permute("lazy_tensors::collective_permute");
 const OpKindWrapper ltc_cross_replica_sum("lazy_tensors::cross_replica_sum");
 const OpKindWrapper ltc_dummy("lazy_tensors::dummy");
+const OpKindWrapper ltc_fused_layer_norm_affine_fwd("lazy_tensors::fused_layer_norm_affine_fwd");
+const OpKindWrapper ltc_fused_layer_norm_affine_bwd("lazy_tensors::fused_layer_norm_affine_bwd");
 const OpKindWrapper ltc_all_gather("lazy_tensors::all_gather");
 const OpKindWrapper ltc_device_data("lazy_tensors::device_data");
 const OpKindWrapper ltc_diagonal_view_update("lazy_tensors::diagonal_view_update");

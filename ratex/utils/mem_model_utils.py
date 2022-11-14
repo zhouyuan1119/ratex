@@ -5,7 +5,7 @@
 from typing import Iterable
 import torch
 import ratex.lazy_tensor_core.core.lazy_model as lm
-from ratex.core.lazy_model import dummy, dummy_bwd
+from ratex.core.lazy_model import dummy, dummy_bwd, fused_layer_norm_affine_fwd, fused_layer_norm_affine_bwd
 import time
 import gc
 
@@ -41,6 +41,28 @@ def run_dummy_bwd(mod, grad_input, grad_output):
         else:
             new_grad_input.append(elm)
     return tuple(new_grad_input)
+
+class FusedLayerNormAffineFunc(torch.autograd.Function):
+    """
+        Fused layer norm affine function, lazy tensor version. Used to replace 
+        the Apex fused kernel during memory analysis. 
+    """
+
+    @staticmethod
+    def forward(ctx, input, weight, bias, normalized_shape, eps):
+        ctx.normalized_shape_ = normalized_shape
+        ctx.eps_ = eps
+        output, mean, invvar = fused_layer_norm_affine_fwd(input, ctx.normalized_shape_, weight, bias, ctx.eps_)
+        ctx.save_for_backward(input, weight, bias, mean, invvar)
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        input_, weight_, bias_, mean_, invvar_ = ctx.saved_tensors
+        grad_input = grad_weight = grad_bias = None
+        grad_input, grad_weight, grad_bias = fused_layer_norm_affine_bwd(
+            grad_output, mean_, invvar_, input_, ctx.normalized_shape_, weight_, bias_, ctx.eps_)
+        return grad_input, grad_weight, grad_bias, None, None
 
 class LayerWrapper(torch.nn.Module):
     """
