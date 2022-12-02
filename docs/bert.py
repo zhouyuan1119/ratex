@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import copy
-from ratex.utils.mem_model_utils import analyze_training_peak_memory, profile_training_peak_memory, print_mem_breakdown, wrap_model
+from ratex.utils.mem_model_utils import analyze_training_memory, profile_training_peak_memory, print_mem_breakdown, wrap_model
 from transformers import BertForSequenceClassification, BertConfig
 from accelerate import init_empty_weights
 import time
@@ -57,7 +57,7 @@ def main():
     model_lt = wrap_model(model_lt, 'top', max_depth=4)
     model_lt = model_lt.to(device="lazy")
     loss_fn = nn.CrossEntropyLoss()
-    peak_memory_ltc, mem_breakdown, node_info = analyze_training_peak_memory(
+    peak_memory_ltc, mem_breakdown, node_info = analyze_training_memory(
         model_lt, loss_fn, 
         input_shape=(bs, seq_len), output_shape=(bs,), 
         input_dtype=torch.int64, output_dtype=torch.int64, 

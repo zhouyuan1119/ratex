@@ -119,12 +119,13 @@ def print_mem_breakdown(mem_breakdown):
             print('  |-bwd: peak {0:6.4f}, param {1:6.4f}, input_act {2:6.4f}, output_act {3:6.4f}, isolated {4:6.4f}'.format(
                 info['bwd']['peak_mem'], info['bwd']['param'], info['bwd']['input_act'], info['bwd']['output_act'], info['bwd']['peak_mem_isolated']))
 
-def analyze_training_peak_memory(model, loss_fn, input_shape, output_shape, 
-                                 input_dtype, output_dtype, input_range=None, output_range=None, 
-                                 n_batches=2):
+def analyze_training_memory(model, loss_fn, input_shape, output_shape, 
+                            input_dtype, output_dtype, input_range=None, output_range=None, 
+                            n_batches=2):
     """
-    Get the peak memory consumption while training the model using an analysis
-    pass on the lazy tensor IR. Assuming that the model is in device "lazy". 
+    Get the memory consumption information while training the model using an analysis
+    pass on the lazy tensor IR. Assuming that the model is in device "lazy". No optimizer
+    is used when analyzing memory. 
 
     Args:
         model: torch.nn.Module  The model to be analyzed. 
@@ -138,6 +139,9 @@ def analyze_training_peak_memory(model, loss_fn, input_shape, output_shape,
     
     Returns:
         peak_mem_mbs: Peak memory consumption in MBs. 
+        breakdown_dict: A dictionary containing the memory breakdown per layer. The granularity is
+                        determined when the model is wrapped. 
+        ir_info: A JSON containing detailed information about each IR node in LTC IR. 
     """
 
     start = time.time() 
@@ -188,7 +192,8 @@ def analyze_training_peak_memory(model, loss_fn, input_shape, output_shape,
 
     end = time.time()
     print('Memory model elapsed time: ', end - start)
-    return peak_mem_mbs, breakdown_dict, lm.get_ltc_ir_info()
+    ir_info = lm.get_ltc_ir_info()
+    return peak_mem_mbs, breakdown_dict, ir_info
 
 def profile_training_peak_memory(model, loss_fn, input_shape, output_shape, 
                                  input_dtype, output_dtype, input_range=None, output_range=None, n_batches=2):

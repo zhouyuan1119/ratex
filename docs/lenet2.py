@@ -20,7 +20,7 @@ from torchvision import datasets, models, transforms
 import time
 import os
 import copy
-from ratex.utils.mem_model_utils import analyze_training_peak_memory, print_mem_breakdown, profile_training_peak_memory, wrap_model
+from ratex.utils.mem_model_utils import analyze_training_memory, print_mem_breakdown, profile_training_peak_memory, wrap_model
 import accelerate
 import json
 
@@ -55,7 +55,7 @@ def main():
     model_lt = wrap_model(model_lt, 'top')
     model_lt = model_lt.to(device="lazy", dtype=torch.float32)
     loss_fn = torch.nn.NLLLoss()
-    peak_memory_ltc, mem_breakdown, ir_info = analyze_training_peak_memory(
+    peak_memory_ltc, mem_breakdown, ir_info = analyze_training_memory(
         model_lt, loss_fn, (4, 3, 32, 32), (4,), torch.float32, torch.int64, output_range=[0, 10])
     
     model_cuda = TorchLeNet()
